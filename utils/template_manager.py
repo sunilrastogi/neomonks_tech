@@ -8,8 +8,8 @@ class TemplateManager:
     def copy_template(source, destination):
 
         if os.path.exists(destination):
-            print(f"[SKIPPED] {destination} already exists")
-            return
+            #delete existing destination folder
+            shutil.rmtree(destination)
 
         shutil.copytree(source, destination)
 
