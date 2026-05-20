@@ -8,6 +8,7 @@ from tasks.product_bootstrap_tasks import bootstrap_product_task
 from utils.output_parser import OutputParser
 from utils.file_writer import FileWriter
 from utils.folder_manager import FolderManager
+from workflows.product_initializer import ProductInitializer
 
 
 def bootstrap_product():
@@ -46,6 +47,14 @@ def bootstrap_product():
             file["path"],
             file["content"]
         )
+
+    product_path = "products/expense_tracker"
+
+    print("\\n=== Initializing Frontend ===\\n")
+    ProductInitializer.initialize_frontend(product_path)
+    
+    print("\\n=== Initializing Backend ===\\n")
+    ProductInitializer.initialize_backend(product_path)
 
     print("\\n=== PRODUCT BOOTSTRAP COMPLETE ===\\n")
 
