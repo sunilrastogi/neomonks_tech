@@ -9,7 +9,7 @@ class ProductInitializer:
         frontend_path = f"{product_path}/frontend"
 
         ShellRunner.run(
-            "npm create vite@latest . -- --template react-ts",
+            "npx --yes create-vite@latest . --template react-ts",
             cwd=frontend_path
         )
 
