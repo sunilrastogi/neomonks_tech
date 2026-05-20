@@ -50,11 +50,8 @@ def bootstrap_product():
 
     product_path = "products/expense_tracker"
 
-    print("\\n=== Initializing Frontend ===\\n")
-    ProductInitializer.initialize_frontend(product_path)
-    
-    print("\\n=== Initializing Backend ===\\n")
-    ProductInitializer.initialize_backend(product_path)
+    print("\\n=== Initializing Product ===\\n")
+    ProductInitializer.initialize_product(product_path)
 
     print("\\n=== PRODUCT BOOTSTRAP COMPLETE ===\\n")
 

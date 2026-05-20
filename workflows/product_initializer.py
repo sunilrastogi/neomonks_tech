@@ -1,48 +1,20 @@
-from utils.shell_runner import ShellRunner
+from utils.template_manager import TemplateManager
 
 
 class ProductInitializer:
 
     @staticmethod
-    def initialize_frontend(product_path):
+    def initialize_product(product_path):
 
-        frontend_path = f"{product_path}/frontend"
+        frontend_destination = f"{product_path}/frontend"
+        backend_destination = f"{product_path}/backend"
 
-        ShellRunner.run(
-            "npx --yes create-vite@latest . --template react-ts",
-            cwd=frontend_path
+        TemplateManager.copy_template(
+            "templates/frontend",
+            frontend_destination
         )
 
-        ShellRunner.run(
-            "npm install",
-            cwd=frontend_path
-        )
-
-    @staticmethod
-    def initialize_backend(product_path):
-
-        backend_path = f"{product_path}/backend"
-
-        ShellRunner.run(
-            "python -m venv venv",
-            cwd=backend_path
-        )
-
-        pip_command = (
-            "venv\\Scripts\\pip install "
-            "django djangorestframework psycopg[binary]"
-        )
-
-        ShellRunner.run(
-            pip_command,
-            cwd=backend_path
-        )
-
-        django_command = (
-            "venv\\Scripts\\django-admin startproject core ."
-        )
-
-        ShellRunner.run(
-            django_command,
-            cwd=backend_path
+        TemplateManager.copy_template(
+            "templates/backend",
+            backend_destination
         )
