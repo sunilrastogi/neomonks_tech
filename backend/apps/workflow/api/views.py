@@ -46,6 +46,8 @@ class ProductViewSet(viewsets.ModelViewSet):
     @staticmethod
     def _scaffold_async(product_name: str, product_slug: str) -> None:
         def _run():
+            from django.db import close_old_connections
+            close_old_connections()
             from apps.workflow.autonomous.scaffolder import ProductScaffolder
             try:
                 ProductScaffolder().scaffold(product_name, product_slug)
@@ -136,6 +138,8 @@ class RequirementViewSet(viewsets.ModelViewSet):
     @staticmethod
     def _trigger_planning(requirement_id: int) -> None:
         def _run():
+            from django.db import close_old_connections
+            close_old_connections()
             from apps.workflow.autonomous.planner import AutonomousPlanner
             try:
                 AutonomousPlanner().run(requirement_id)
@@ -272,27 +276,45 @@ class TaskViewSet(viewsets.ModelViewSet):
         # Optional: return a specific file's content
         rel_file = request.query_params.get('file')
         if rel_file:
-            # Safety: prevent path traversal
             target = (ws_root / rel_file).resolve()
-            if not str(target).startswith(str(ws_root.resolve())):
+            # Prevent path traversal (is_relative_to is case-insensitive on Windows)
+            try:
+                target.relative_to(ws_root.resolve())
+            except ValueError:
                 return Response({'error': 'Invalid path'}, status=400)
             if not target.exists():
-                return Response({'error': 'File not found'}, status=404)
-            content = target.read_text(encoding='utf-8', errors='replace')
+                return Response({
+                    'error': 'File not found',
+                    'looked_for': str(target),
+                    'workspace': str(ws_root),
+                }, status=404)
+            try:
+                content = target.read_text(encoding='utf-8', errors='replace')
+            except Exception as e:
+                return Response({'error': f'Could not read file: {e}'}, status=500)
             return Response({'path': rel_file, 'content': content, 'size': target.stat().st_size})
 
-        # List all files in workspace
+        # List all files in workspace, skipping heavy/generated directories
+        SKIP_DIRS = {
+            'node_modules', 'venv', '.git', '__pycache__',
+            'dist', 'build', '.mypy_cache', '.pytest_cache',
+            '.venv', 'env', '.tox', 'coverage',
+        }
+
         if not ws_root.exists():
             return Response({
                 'workspace': str(ws_root),
                 'branch': branch,
                 'files': [],
-                'message': f'Product folder not scaffolded yet. Create the product first to initialise products/{product.slug}/.',
+                'message': f'Product folder not scaffolded yet — products/{product.slug}/ does not exist.',
             })
 
         files = []
         for f in sorted(ws_root.rglob('*')):
-            if f.is_file() and '.git' not in f.parts:
+            # Skip anything inside an excluded directory
+            if any(part in SKIP_DIRS for part in f.parts):
+                continue
+            if f.is_file():
                 rel = str(f.relative_to(ws_root))
                 files.append({
                     'path': rel,
