@@ -102,6 +102,8 @@ def _dispatch_ready_async(product_id: int) -> None:
     import threading
 
     def _do():
+        from django.db import close_old_connections
+        close_old_connections()
         try:
             from apps.workflow.services.orchestrator import WorkflowOrchestrator
             dispatched = WorkflowOrchestrator.dispatch_ready_tasks(product_id)
@@ -211,6 +213,8 @@ def _on_pr_merged_async(task_id: int) -> None:
     import threading
 
     def _do():
+        from django.db import close_old_connections
+        close_old_connections()
         try:
             from apps.workflow.services.lock_manager import LockManager
             from apps.workflow.services.orchestrator import WorkflowOrchestrator

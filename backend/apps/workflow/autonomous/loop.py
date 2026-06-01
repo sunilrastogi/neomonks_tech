@@ -92,14 +92,17 @@ class AutonomousLoop:
     # ── internal ──────────────────────────────────────────────────────────
 
     def _run(self) -> None:
+        from django.db import close_old_connections
+        close_old_connections()
         while not self._stop_event.is_set():
             try:
+                close_old_connections()
                 self._iterate()
-            except Exception:
-                logger.exception("Loop iteration failed")
+            except Exception as exc:
+                logger.exception("Loop iteration failed: %s", exc)
                 with _status_lock:
                     _loop_status["errors"].append(
-                        {"ts": time.time(), "msg": "Loop iteration error (see server logs)"}
+                        {"ts": time.time(), "msg": str(exc)[:200]}
                     )
                     _loop_status["errors"] = _loop_status["errors"][-10:]
             self._stop_event.wait(self.POLL_INTERVAL)
@@ -216,12 +219,14 @@ class AutonomousLoop:
         return summary
 
     def _run_planner(self, req_id: int, planner) -> None:
+        from django.db import close_old_connections
+        close_old_connections()
         try:
             planner.run(req_id)
-        except Exception:
-            logger.exception("Planner failed for req %d", req_id)
+        except Exception as exc:
+            logger.exception("Planner failed for req %d: %s", req_id, exc)
             with _status_lock:
                 _loop_status["errors"].append(
-                    {"ts": time.time(), "msg": f"Planner failed for requirement {req_id}"}
+                    {"ts": time.time(), "msg": f"Planner req {req_id}: {str(exc)[:150]}"}
                 )
                 _loop_status["errors"] = _loop_status["errors"][-10:]

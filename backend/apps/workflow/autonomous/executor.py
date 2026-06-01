@@ -274,16 +274,19 @@ class AutonomousExecutor:
         t.start()
 
     def _run(self, task_id: int) -> None:
+        from django.db import close_old_connections
+        close_old_connections()
+
         sem = _task_semaphore(task_id)
         if not sem.acquire(blocking=False):
             logger.info("Executor: task %d already running in another thread, skipping", task_id)
             return
         try:
             self._execute(task_id)
-        except Exception:
-            logger.exception("Executor: unhandled error for task %d", task_id)
-            # Mark task as changes-requested so it can be retried
+        except Exception as exc:
+            logger.exception("Executor: unhandled error for task %d: %s", task_id, exc)
             try:
+                close_old_connections()
                 task = Task.objects.get(id=task_id)
                 task.status = TaskStatus.CHANGES_REQUESTED
                 task.save(update_fields=["status", "updated_at"])
