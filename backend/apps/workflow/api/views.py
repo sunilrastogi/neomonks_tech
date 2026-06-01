@@ -45,6 +45,8 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     @staticmethod
     def _scaffold_async(product_name: str, product_slug: str) -> None:
+        from apps.workflow.autonomous.thread_pool import submit
+
         def _run():
             from django.db import close_old_connections
             close_old_connections()
@@ -56,7 +58,7 @@ class ProductViewSet(viewsets.ModelViewSet):
                 logging.getLogger(__name__).exception(
                     "Scaffolding failed for product '%s'", product_slug
                 )
-        threading.Thread(target=_run, daemon=True, name=f"scaffold-{product_slug}").start()
+        submit(_run)
 
     @action(detail=True, methods=['get'])
     def state(self, request, pk=None):
@@ -96,11 +98,15 @@ class ProductViewSet(viewsets.ModelViewSet):
         Run one autonomous loop iteration for this product (async)."""
         product = self.get_object()
 
+        from apps.workflow.autonomous.thread_pool import submit
+
         def _run():
+            from django.db import close_old_connections
+            close_old_connections()
             from apps.workflow.autonomous.loop import AutonomousLoop
             AutonomousLoop().run_once(product_id=product.id)
 
-        threading.Thread(target=_run, daemon=True, name=f"loop-{product.id}").start()
+        submit(_run)
         return Response({'message': f'Autonomous loop iteration started for product {product.id}'})
 
     @action(detail=True, methods=['post'])
@@ -137,6 +143,8 @@ class RequirementViewSet(viewsets.ModelViewSet):
 
     @staticmethod
     def _trigger_planning(requirement_id: int) -> None:
+        from apps.workflow.autonomous.thread_pool import submit
+
         def _run():
             from django.db import close_old_connections
             close_old_connections()
@@ -148,7 +156,7 @@ class RequirementViewSet(viewsets.ModelViewSet):
                 logging.getLogger(__name__).exception(
                     "Autonomous planner failed for requirement %d: %s", requirement_id, exc
                 )
-        threading.Thread(target=_run, daemon=True, name=f"plan-{requirement_id}").start()
+        submit(_run)
 
     def perform_create(self, serializer):
         serializer.save()
@@ -258,6 +266,28 @@ class TaskViewSet(viewsets.ModelViewSet):
         reason = request.data.get('reason', '')
         task = TaskDispatcher.request_changes_on_task(task.id, reason)
         return Response(self.get_serializer(task).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'])
+    def rerun(self, request, pk=None):
+        """POST /api/v1/workflow/tasks/{id}/rerun/
+        Force-reset a CHANGES_REQUESTED or failed task back to READY
+        so the autonomous loop picks it up immediately."""
+        from apps.workflow.autonomous.thread_pool import submit
+
+        task = self.get_object()
+        task.status = TaskStatus.READY
+        task.assigned_agent = None
+        task.save(update_fields=['status', 'assigned_agent', 'updated_at'])
+
+        # Immediately execute in background
+        def _run():
+            from django.db import close_old_connections
+            from apps.workflow.autonomous.executor import AutonomousExecutor
+            close_old_connections()
+            AutonomousExecutor().execute_in_background(task.id)
+
+        submit(_run)
+        return Response(self.get_serializer(task).data)
 
     @action(detail=True, methods=['get'])
     def workspace(self, request, pk=None):

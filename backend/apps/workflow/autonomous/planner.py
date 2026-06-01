@@ -1,14 +1,12 @@
 """
 Autonomous Planning Phase
 =========================
-1. Architect agent reads the requirement document and produces a structured JSON design.
-2. Product Owner parses the artifact and creates Tasks + TaskDependencies in the DB.
-3. Dispatcher moves dependency-free tasks to READY immediately.
+Product Owner → reads requirement
+Architect     → designs system, produces JSON task list
+PO            → creates Task + TaskDependency records, dispatches READY tasks
 
-Design notes:
-- Only ONE LLM call (the architect). The separate PO-brief step is skipped to halve wait time.
-- Granular WorkflowEvents are emitted at every step so the dashboard stays live.
-- On any failure the requirement is reset to RECEIVED so the loop can retry next tick.
+All LLM calls go through apps.workflow.autonomous.llm (direct Ollama REST API,
+global semaphore, no CrewAI overhead that causes CUDA OOM).
 """
 from __future__ import annotations
 
@@ -31,173 +29,139 @@ from apps.workflow.models import (
 
 logger = logging.getLogger(__name__)
 
+LLM_TIMEOUT = int(getattr(settings, "LLM_TIMEOUT_SECONDS", 300))
 
-# ── Architect prompt ───────────────────────────────────────────────────────────
 
-ARCHITECT_PROMPT = """You are the Solution Architect at NeoMonks. Analyse the requirement below and produce a complete system design.
+# ── Event helpers ─────────────────────────────────────────────────────────────
+
+def _emit(event_type: str, entity_type: str, entity_id: int, payload: dict) -> None:
+    try:
+        WorkflowEvent.objects.create(
+            event_type=event_type, entity_type=entity_type,
+            entity_id=entity_id, payload_json=payload,
+        )
+    except Exception:
+        logger.exception("Failed to emit %s", event_type)
+
+
+def _log(req_id: int, step: str, detail: str = "") -> None:
+    _emit("PLANNING_STEP", "REQUIREMENT", req_id, {"step": step, "detail": detail})
+    logger.info("Planning [req %d] %s  %s", req_id, step, detail)
+
+
+# ── JSON extraction ───────────────────────────────────────────────────────────
+
+def _extract_json(text: str) -> dict[str, Any]:
+    """Pull first JSON object from free-form text, stripping markdown fences."""
+    text = re.sub(r"```(?:json)?", "", text).strip()
+    # Try full parse
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    # Try largest {...} block
+    for match in re.finditer(r"\{[\s\S]*\}", text):
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            continue
+    return {}
+
+
+# ── LLM prompts ───────────────────────────────────────────────────────────────
+
+ARCHITECT_SYSTEM = """You are an expert software architect.
+Your ONLY job is to output a single valid JSON object.
+Never output explanations, markdown, or any text outside the JSON object.
+Always start your response with { and end with }."""
+
+ARCHITECT_PROMPT = """Analyse this software requirement and return a JSON architecture with tasks.
 
 PRODUCT: {product_name}
 REQUIREMENT: {title}
+DETAILS: {document}
 
-{document}
-
-Return ONLY a valid JSON object — no markdown fences, no explanation — exactly in this shape:
+Return ONLY this JSON structure (no other text):
 
 {{
-  "rationale": "Why this design was chosen (one paragraph)",
-  "components": [
-    {{"name": "ComponentName", "type": "frontend|backend|database|api|service|infra", "description": "what it does"}}
-  ],
+  "rationale": "one sentence explaining the architecture",
   "tasks": [
     {{
-      "title": "Concise task title",
-      "description": "Detailed description of exactly what to build",
-      "owner_role": "FRONTEND_DEVELOPER|BACKEND_DEVELOPER|QA_ENGINEER|DEVOPS_ENGINEER|DATA_ENGINEER|MLOPS_ENGINEER|DATA_SCIENTIST|BI_DEVELOPER|INFRA_ADMIN",
-      "estimate": "XS|S|M|L|XL",
-      "files": ["relative/path/to/file.ext"],
+      "title": "short task title",
+      "description": "what exactly to build",
+      "owner_role": "BACKEND_DEVELOPER",
+      "estimate": "M",
+      "files": ["backend/apps/core/models.py"],
       "depends_on": []
     }}
   ]
 }}
 
 Rules:
-- Every task must have at least one file.
-- depends_on contains task TITLES from this same list (empty array if none).
-- Use realistic file paths under frontend/src/ or backend/apps/.
-- Return ONLY the JSON, nothing else.
-"""
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-def _emit(event_type: str, entity_type: str, entity_id: int, payload: dict) -> None:
-    try:
-        WorkflowEvent.objects.create(
-            event_type=event_type,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            payload_json=payload,
-        )
-    except Exception:
-        logger.exception("Failed to emit %s", event_type)
-
-
-def _emit_log(req_id: int, step: str, detail: str = "") -> None:
-    """Emit a REQUIREMENT_REVIEWED event repurposed as a planning progress ping."""
-    _emit("PLANNING_STEP", "REQUIREMENT", req_id, {"step": step, "detail": detail})
-    logger.info("Planning [req %d] %s %s", req_id, step, detail)
-
-
-def _extract_json(text: str) -> dict[str, Any]:
-    """Pull the first JSON object out of free-form LLM output."""
-    # Strip markdown fences
-    text = re.sub(r"```(?:json)?", "", text).strip()
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-    match = re.search(r"\{[\s\S]*\}", text)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-    return {}
-
-
-def _run_architect_llm(req: Requirement) -> str:
-    """Run the architect LLM call. Returns raw text output."""
-    doc = (req.source_document or req.summary or req.title)[:5000]
-    prompt = ARCHITECT_PROMPT.format(
-        product_name=req.product.name,
-        title=req.title,
-        document=doc,
-    )
-    llm = getattr(settings, "DEFAULT_AGENT_MODEL", "ollama/qwen2.5-coder:7b")
-    try:
-        from crewai import Agent, Crew
-        from crewai import Task as CTask
-
-        agent = Agent(
-            role="Solution Architect",
-            goal="Produce a complete, buildable system architecture as a JSON object",
-            backstory="You are an expert software architect. You always return clean, valid JSON.",
-            llm=llm,
-            verbose=False,
-        )
-        task = CTask(
-            description=prompt,
-            agent=agent,
-            expected_output="Valid JSON architecture document",
-        )
-        crew = Crew(agents=[agent], tasks=[task], verbose=False)
-        result = crew.kickoff()
-        return str(result)
-    except Exception as exc:
-        logger.warning("Architect LLM failed: %s", exc)
-        return ""
+- owner_role must be one of: FRONTEND_DEVELOPER, BACKEND_DEVELOPER, QA_ENGINEER, DEVOPS_ENGINEER, DATA_ENGINEER, INFRA_ADMIN
+- estimate must be one of: XS, S, M, L, XL
+- depends_on lists task TITLES from this same list
+- Create 3-7 tasks that together fully implement the requirement
+- Include at least one BACKEND_DEVELOPER and one FRONTEND_DEVELOPER task
+- Start your response with {{ immediately"""
 
 
 # ── Main planner ──────────────────────────────────────────────────────────────
 
 class AutonomousPlanner:
-    """Runs the full planning pipeline for a single requirement."""
+    """Runs the full autonomous planning pipeline for a requirement."""
 
     def run(self, requirement_id: int) -> ArchitectureArtifact:
-        """
-        Pipeline:
-          RECEIVED → UNDER_REVIEW
-            → [LLM] architect designs
-            → tasks + dependencies saved
-          → APPROVED
-          → READY tasks dispatched
-
-        On any error: requirement is reset to RECEIVED so the loop retries.
-        """
         req = Requirement.objects.select_related("product").get(id=requirement_id)
 
-        # Mark in-review and announce start
+        # Mark in-review
         req.status = RequirementStatus.UNDER_REVIEW
         req.save(update_fields=["status", "updated_at"])
-        _emit_log(req.id, "STARTED", f"Planning '{req.title}' for {req.product.name}")
+        _log(req.id, "STARTED", f"Planning '{req.title}' for {req.product.name}")
 
         try:
-            return self._run_pipeline(req)
+            return self._pipeline(req)
         except Exception as exc:
-            # Reset so the loop can retry on the next tick
             logger.exception("Planning failed for req %d — resetting to RECEIVED", req.id)
             req.refresh_from_db()
             req.status = RequirementStatus.RECEIVED
             req.save(update_fields=["status", "updated_at"])
-            _emit_log(req.id, "FAILED", str(exc)[:200])
+            _log(req.id, "FAILED", str(exc)[:200])
             raise
 
-    def _run_pipeline(self, req: Requirement) -> ArchitectureArtifact:
-        # ── Step 1: call the LLM ─────────────────────────────────────────
-        _emit_log(req.id, "LLM_CALL", f"Calling {getattr(settings, 'DEFAULT_AGENT_MODEL', 'ollama/...')} — this may take 1-3 min")
-        t0 = time.monotonic()
-        raw_output = _run_architect_llm(req)
-        elapsed = round(time.monotonic() - t0, 1)
-        _emit_log(req.id, "LLM_DONE", f"LLM responded in {elapsed}s ({len(raw_output)} chars)")
+    def _pipeline(self, req: Requirement) -> ArchitectureArtifact:
+        from apps.workflow.autonomous.llm import call as llm_call
 
-        # ── Step 2: parse JSON ───────────────────────────────────────────
-        design = _extract_json(raw_output)
+        def log(step, detail=""):
+            _log(req.id, step, detail)
+
+        # ── Step 1: PO summarises requirement ────────────────────────────
+        log("PO_READING", "Product Owner reading requirement document")
+        doc = (req.source_document or req.summary or req.title)[:4000]
+        po_summary = self._run_po(req, doc, llm_call, log)
+        log("PO_DONE", f"PO summary: {po_summary[:100]}")
+
+        # ── Step 2: Architect designs system ────────────────────────────
+        log("ARCHITECT_DESIGNING", "Solution Architect designing the system")
+        design_text = self._run_architect(req, doc, po_summary, llm_call, log)
+
+        # ── Step 3: Parse JSON ───────────────────────────────────────────
+        design = _extract_json(design_text)
         if not design.get("tasks"):
-            logger.warning("Architect returned no tasks for req %d — using fallback", req.id)
-            _emit_log(req.id, "FALLBACK", "LLM returned no parseable tasks — using fallback decomposition")
+            log("FALLBACK", "Architect output not parseable — using fallback decomposition")
             design = self._fallback_design(req)
         else:
-            _emit_log(req.id, "DESIGN_PARSED", f"{len(design['tasks'])} tasks in design")
+            log("DESIGN_PARSED", f"{len(design['tasks'])} tasks in design")
 
-        # ── Step 3: save architecture artifact ──────────────────────────
+        # ── Step 4: Save artifact ────────────────────────────────────────
         artifact = self._save_artifact(req, design)
-        _emit_log(req.id, "ARTIFACT_SAVED", f"Architecture artifact id={artifact.id}")
+        log("ARTIFACT_SAVED", f"Architecture artifact id={artifact.id}")
 
-        # ── Step 4: create tasks + dependencies ─────────────────────────
+        # ── Step 5: Create tasks + dependencies ─────────────────────────
         task_count = self._generate_tasks(req, artifact, design)
-        _emit_log(req.id, "TASKS_CREATED", f"{task_count} tasks created in DB")
+        log("TASKS_CREATED", f"{task_count} tasks created in DB")
 
-        # ── Step 5: approve requirement + architecture ───────────────────
+        # ── Step 6: Approve ──────────────────────────────────────────────
         with transaction.atomic():
             req.status = RequirementStatus.APPROVED
             req.save(update_fields=["status", "updated_at"])
@@ -211,42 +175,83 @@ class AutonomousPlanner:
         _emit("ARCHITECTURE_APPROVED", "ARCHITECTURE", artifact.id,
               {"requirement_id": req.id, "task_count": task_count})
 
-        # ── Step 6: dispatch dependency-free tasks ───────────────────────
+        # ── Step 7: Dispatch ready tasks ────────────────────────────────
         dispatched = self._dispatch_ready(req.product_id)
-        _emit_log(req.id, "DISPATCHED", f"{dispatched} task(s) moved to READY")
+        log("DISPATCHED", f"{dispatched} task(s) moved to READY")
 
         return artifact
 
-    # ── helpers ──────────────────────────────────────────────────────────
+    # ── LLM calls ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def _fallback_design(req: Requirement) -> dict[str, Any]:
-        """Minimal viable design when the LLM returns unparseable output."""
+    def _run_po(req, doc, llm_call, log) -> str:
+        prompt = f"""You are a Product Owner reviewing a requirement.
+Summarise these key points in 3 bullet points, then write one sentence brief for the architect.
+
+PRODUCT: {req.product.name}
+REQUIREMENT: {req.title}
+DOCUMENT: {doc[:2000]}
+
+Output format:
+- Key point 1
+- Key point 2
+- Key point 3
+ARCHITECT BRIEF: <one sentence>"""
+        result = llm_call(prompt, system="You are a Product Owner. Be concise.", emit_log=log)
+        return result or f"Build {req.title} for {req.product.name}"
+
+    @staticmethod
+    def _run_architect(req, doc, po_summary, llm_call, log) -> str:
+        prompt = ARCHITECT_PROMPT.format(
+            product_name=req.product.name,
+            title=req.title,
+            document=doc[:3000],
+        )
+        return llm_call(prompt, system=ARCHITECT_SYSTEM, emit_log=log)
+
+    @staticmethod
+    def _fallback_design(req) -> dict[str, Any]:
+        slug = req.product.slug.replace("-", "_")
         return {
-            "rationale": f"Fallback decomposition for: {req.title}",
-            "components": [{"name": "Core", "type": "backend", "description": req.summary or req.title}],
+            "rationale": f"Standard full-stack decomposition for {req.title}",
             "tasks": [
                 {
-                    "title": f"Backend: implement {req.title}",
-                    "description": req.source_document or req.summary or req.title,
+                    "title": f"Design data models for {req.title}",
+                    "description": f"Create Django models, serializers and migrations for: {req.summary or req.title}",
                     "owner_role": "BACKEND_DEVELOPER",
                     "estimate": "M",
-                    "files": ["backend/apps/core/views.py", "backend/apps/core/models.py"],
+                    "files": [f"backend/apps/{slug}/models.py", f"backend/apps/{slug}/serializers.py", f"backend/apps/{slug}/migrations/0001_initial.py"],
                     "depends_on": [],
                 },
                 {
-                    "title": f"Frontend: implement {req.title} UI",
-                    "description": f"Build the user interface for: {req.title}",
-                    "owner_role": "FRONTEND_DEVELOPER",
+                    "title": f"Build REST API for {req.title}",
+                    "description": f"Create DRF views, URLs and permissions for: {req.summary or req.title}",
+                    "owner_role": "BACKEND_DEVELOPER",
                     "estimate": "M",
-                    "files": [f"frontend/src/pages/{req.product.slug}.tsx"],
-                    "depends_on": [f"Backend: implement {req.title}"],
+                    "files": [f"backend/apps/{slug}/views.py", f"backend/apps/{slug}/urls.py"],
+                    "depends_on": [f"Design data models for {req.title}"],
+                },
+                {
+                    "title": f"Build UI components for {req.title}",
+                    "description": f"Create React components with TypeScript and Tailwind CSS for: {req.summary or req.title}",
+                    "owner_role": "FRONTEND_DEVELOPER",
+                    "estimate": "L",
+                    "files": [f"frontend/src/pages/{req.product.slug}.tsx", f"frontend/src/components/{req.product.slug}/index.tsx"],
+                    "depends_on": [f"Build REST API for {req.title}"],
+                },
+                {
+                    "title": f"Write tests for {req.title}",
+                    "description": f"Write pytest unit and integration tests for the backend, Jest tests for frontend",
+                    "owner_role": "QA_ENGINEER",
+                    "estimate": "M",
+                    "files": [f"tests/test_{slug}.py", f"frontend/src/__tests__/{req.product.slug}.test.tsx"],
+                    "depends_on": [f"Build REST API for {req.title}", f"Build UI components for {req.title}"],
                 },
             ],
         }
 
     @staticmethod
-    def _save_artifact(req: Requirement, design: dict) -> ArchitectureArtifact:
+    def _save_artifact(req, design) -> ArchitectureArtifact:
         artifact, _ = ArchitectureArtifact.objects.update_or_create(
             requirement=req,
             defaults={
@@ -255,13 +260,12 @@ class AutonomousPlanner:
                 "status": ArchitectureStatus.SUBMITTED,
             },
         )
-        _emit("ARCHITECTURE_SUBMITTED", "ARCHITECTURE", artifact.id,
-              {"requirement_id": req.id})
+        _emit("ARCHITECTURE_SUBMITTED", "ARCHITECTURE", artifact.id, {"requirement_id": req.id})
         return artifact
 
     @staticmethod
     @transaction.atomic
-    def _generate_tasks(req: Requirement, artifact: ArchitectureArtifact, design: dict) -> int:
+    def _generate_tasks(req, artifact, design) -> int:
         from apps.workflow.models import AgentRole
         raw_tasks: list[dict] = design.get("tasks", [])
         created: dict[str, Task] = {}
@@ -270,39 +274,29 @@ class AutonomousPlanner:
             role = raw.get("owner_role", "BACKEND_DEVELOPER")
             if role not in AgentRole.values:
                 role = "BACKEND_DEVELOPER"
-
             est = raw.get("estimate", "M")
             if est not in ("XS", "S", "M", "L", "XL"):
                 est = "M"
-
-            title = raw.get("title") or f"Task {i + 1}"
+            title = (raw.get("title") or f"Task {i+1}").strip()
             desc = raw.get("description", "")
-
-            # Embed planned files so the executor knows what to create
             files = raw.get("files", [])
             if files:
                 desc += f"\n\n__PLANNED_FILES__: {json.dumps(files)}"
 
             task = Task.objects.create(
-                product=req.product,
-                requirement=req,
-                architecture=artifact,
-                title=title,
-                description=desc,
-                owner_role=role,
-                estimate=est,
-                order_index=i,
-                status=TaskStatus.BLOCKED,
+                product=req.product, requirement=req, architecture=artifact,
+                title=title, description=desc, owner_role=role,
+                estimate=est, order_index=i, status=TaskStatus.BLOCKED,
             )
             created[title] = task
 
-        # Wire dependencies (second pass — all tasks exist now)
+        # Wire dependencies
         for raw in raw_tasks:
-            child = created.get(raw.get("title", ""))
+            child = created.get((raw.get("title") or "").strip())
             if not child:
                 continue
             for dep_title in raw.get("depends_on", []):
-                parent = created.get(dep_title)
+                parent = created.get(dep_title.strip())
                 if parent and parent.id != child.id:
                     TaskDependency.objects.get_or_create(task=child, depends_on_task=parent)
 
@@ -311,5 +305,4 @@ class AutonomousPlanner:
     @staticmethod
     def _dispatch_ready(product_id: int) -> int:
         from apps.workflow.services.orchestrator import WorkflowOrchestrator
-        dispatched = WorkflowOrchestrator.dispatch_ready_tasks(product_id)
-        return len(dispatched)
+        return len(WorkflowOrchestrator.dispatch_ready_tasks(product_id))

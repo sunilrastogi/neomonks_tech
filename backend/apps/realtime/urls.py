@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import dashboard, event_stream, health, loop_status
+from .views import dashboard, event_stream, health, loop_status, ollama_status, ollama_start, pr_review
 
 app_name = "realtime"
 
@@ -9,4 +9,7 @@ urlpatterns = [
     path("stream/", event_stream, name="stream"),
     path("dashboard/", dashboard, name="dashboard"),
     path("loop-status/", loop_status, name="loop-status"),
+    path("ollama-status/", ollama_status, name="ollama-status"),
+    path("ollama-start/", ollama_start, name="ollama-start"),
+    path("pr-review/<int:task_id>/", pr_review, name="pr-review"),
 ]

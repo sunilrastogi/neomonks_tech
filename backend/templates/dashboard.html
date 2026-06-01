@@ -171,6 +171,7 @@
 
 <!-- HEADER -->
 <header>
+  <img src="/static/img/logo.png" alt="" style="width:34px;height:34px;border-radius:50%;object-fit:cover;flex-shrink:0" onerror="this.style.display='none'">
   <span class="logo">NeoMonks</span>
   <span class="tagline">Autonomous Workflow</span>
   <nav class="tabs">
@@ -199,6 +200,20 @@
   <!-- ── PIPELINE tab ── -->
   <div class="page on" id="pg-pipeline">
 
+    <!-- ── ACTION BAR (always visible at top) ── -->
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:16px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px">
+      <select id="loop-product-sel" style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none">
+        <option value="">All products</option>
+      </select>
+      <button class="btn btn-p" onclick="runLoop()" style="padding:8px 18px;font-size:13px">&#9654; Run Loop</button>
+      <button class="btn btn-i" onclick="dispatchAll()" style="padding:8px 14px;font-size:13px">&#8599; Dispatch Ready</button>
+      <button class="btn btn-gh" onclick="syncPRs()" style="padding:8px 14px;font-size:13px">&#8635; Sync PRs</button>
+      <button class="btn btn-gh" onclick="refreshAll()" style="padding:8px 14px;font-size:13px">&#8635; Refresh</button>
+      <span class="loop-badge stopped" id="loop-badge2" style="margin-left:auto">stopped</span>
+      <span style="font-size:10px;color:var(--muted)" id="loop-last-tick"></span>
+      <div id="action-resp" style="width:100%;font-size:11px;color:var(--muted);display:none"></div>
+    </div>
+
     <!-- Pipeline summary -->
     <div class="pipeline" id="pipeline-stages">
       <div class="pipe-stage"><div class="ps-label">Requirements</div><div class="ps-val" id="ps-req">—</div></div>
@@ -218,9 +233,15 @@
       <div id="pr-gate-list"></div>
     </div>
 
+    <!-- Changes requested queue -->
+    <div class="pr-gate" id="changes-section" style="display:none;border-color:var(--warn)">
+      <h3 style="color:var(--warn)">&#8617; Changes Requested <span class="chip" id="changes-cnt">0</span></h3>
+      <div id="changes-list"></div>
+    </div>
+
     <!-- Blocked queue -->
     <div class="blocked-list" id="blocked-section" style="display:none">
-      <h3>🔒 Blocked Tasks</h3>
+      <h3>Blocked Tasks</h3>
       <div id="blocked-list"></div>
     </div>
 
@@ -249,24 +270,25 @@
           <div style="font-size:10px;color:var(--muted)">In Review</div>
         </div>
       </div>
-      <!-- Planning log — live steps from the LLM run -->
+      <!-- Planning log -->
       <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;margin-bottom:6px">Planning Log</div>
-      <div id="planning-log" style="background:var(--bg);border-radius:6px;padding:8px;max-height:160px;overflow-y:auto;font-size:11px;font-family:monospace">
+      <div id="planning-log" style="background:var(--bg);border-radius:6px;padding:8px;max-height:120px;overflow-y:auto;font-size:11px;font-family:monospace">
         <span style="color:var(--muted)">Waiting for activity…</span>
       </div>
     </div>
 
-    <!-- Quick actions -->
-    <div class="sec" style="margin-bottom:10px">Quick Actions</div>
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
-      <select id="loop-product-sel" style="background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px;font-size:12px;outline:none">
-        <option value="">All products</option>
-      </select>
-      <button class="btn btn-p" onclick="runLoop()">▶ Run Loop Now</button>
-      <button class="btn btn-gh" onclick="syncPRs()">↻ Sync PRs</button>
-      <button class="btn btn-gh" onclick="refreshAll()">⟳ Refresh</button>
+    <!-- Agent Activity Log -->
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:16px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <span style="font-size:13px;font-weight:700">Agent Activity</span>
+        <span style="font-size:10px;color:var(--muted)">Live log of what each agent is doing</span>
+        <button onclick="document.getElementById('agent-log').innerHTML=''" style="margin-left:auto;background:var(--border);border:none;color:var(--muted);font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer">Clear</button>
+      </div>
+      <div id="agent-log" style="background:var(--bg);border-radius:6px;padding:8px;max-height:200px;overflow-y:auto;font-size:11px;font-family:monospace">
+        <span style="color:var(--muted)">Waiting for agents to start…</span>
+      </div>
     </div>
-    <div id="action-resp" style="font-size:11px;color:var(--muted);margin-top:4px"></div>
+
   </div>
 
   <!-- ── BOARD tab ── -->
@@ -381,7 +403,18 @@
 
 <!-- EVENTS PANEL -->
 <div class="ev-panel">
-  <div class="evh">Live Events <span id="evcnt">0</span></div>
+  <div class="evh">
+    Live Events <span id="evcnt">0</span>
+    <button onclick="clearEvents()" style="margin-left:auto;background:var(--border);border:none;color:var(--muted);font-size:10px;padding:2px 8px;border-radius:4px;cursor:pointer;">Clear</button>
+  </div>
+
+  <!-- Ollama status bar -->
+  <div id="ollama-bar" style="padding:8px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:11px">
+    <span style="width:7px;height:7px;border-radius:50%;background:var(--muted);flex-shrink:0" id="ollama-dot"></span>
+    <span id="ollama-lbl" style="flex:1;color:var(--muted)">Ollama: checking…</span>
+    <button id="ollama-btn" onclick="startOllama()" style="display:none;background:var(--accent);border:none;color:#fff;font-size:10px;padding:3px 8px;border-radius:4px;cursor:pointer;font-weight:600">Start</button>
+  </div>
+
   <div id="evlist"></div>
 </div>
 
@@ -465,6 +498,27 @@ function renderPipeline(){
     prGate.style.display='none';
   }
 
+  // Changes requested section
+  const changesReq=tasks.filter(t=>t.status==='CHANGES_REQUESTED');
+  const csec=document.getElementById('changes-section');
+  const clist=document.getElementById('changes-list');
+  document.getElementById('changes-cnt').textContent=changesReq.length;
+  if(changesReq.length){
+    csec.style.display='block';
+    clist.innerHTML=changesReq.map(t=>`
+      <div class="pr-item">
+        <div>
+          <div class="pi-title">${esc(t.title)}</div>
+          <div class="pi-agent">${esc((t.owner_role||'').replace(/_/g,' '))} &mdash; waiting to be re-executed by loop</div>
+        </div>
+        <div class="pi-btns">
+          <button class="btn btn-warn" style="font-size:11px;padding:5px 10px" onclick="rerunTask(${t.id})">&#8617; Re-run Now</button>
+        </div>
+      </div>`).join('');
+  } else {
+    csec.style.display='none';
+  }
+
   // Blocked queue
   const blocked=tasks.filter(t=>t.status==='BLOCKED');
   const bsec=document.getElementById('blocked-section');
@@ -474,9 +528,15 @@ function renderPipeline(){
     blist.innerHTML=blocked.map(t=>{
       const deps=(t.dependencies||[]).filter(d=>['BLOCKED','READY','IN_PROGRESS','IN_REVIEW','CHANGES_REQUESTED'].includes(taskData[d.depends_on_task]?.status));
       const waiting=deps.map(d=>taskData[d.depends_on_task]?.title||`Task ${d.depends_on_task}`).join(', ');
-      return `<div class="bl-item">
-        <div class="bl-title">${esc(t.title)}</div>
-        ${waiting?`<div class="bl-waiting">Waiting on: ${esc(waiting)}</div>`:'<div class="bl-waiting" style="color:var(--ok)">Ready to dispatch</div>'}
+      const canDispatch=!waiting;
+      return `<div class="bl-item" style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+        <div>
+          <div class="bl-title">${esc(t.title)}</div>
+          ${waiting
+            ?`<div class="bl-waiting">Waiting on: ${esc(waiting)}</div>`
+            :`<div class="bl-waiting" style="color:var(--ok)">Dependencies cleared — ready to dispatch</div>`}
+        </div>
+        ${canDispatch?`<button class="btn btn-i" style="font-size:11px;padding:5px 10px;flex-shrink:0" onclick="dispatchProduct(${t.product})">Dispatch</button>`:''}
       </div>`;
     }).join('');
   } else {
@@ -594,17 +654,80 @@ function cat(t){
   if(t.startsWith('PR')) return 'P';
   return '';
 }
+// Event types that go to the planning log only — not the main feed
+const PLANNING_ONLY=new Set(['PLANNING_STEP','AGENT_LOG']);
+
 function pushEv(type,data){
   evCount++;
   document.getElementById('evcnt').textContent=evCount;
+  if(PLANNING_ONLY.has(type)) return;  // planning steps shown in the log panel only
+
   const list=document.getElementById('evlist');
   const p=data.payload||{};
-  const label=p.title||p.file_path||p.branch_name||p.pr_url||'';
+  const label=p.title||p.file_path||p.branch_name||p.pr_url||p.step||'';
   const item=document.createElement('div');
   item.className=`ei ${cat(type)}`;
   item.innerHTML=`<div class="et">${esc(type)}</div><div class="ed">${esc(label)}</div><div class="ets">${data.ts?fmt(data.ts):''}</div>`;
   list.insertBefore(item,list.firstChild);
-  while(list.children.length>300) list.removeChild(list.lastChild);
+  while(list.children.length>50) list.removeChild(list.lastChild); // cap at 50
+}
+
+function clearEvents(){
+  document.getElementById('evlist').innerHTML='';
+  evCount=0;
+  document.getElementById('evcnt').textContent='0';
+}
+
+// ── Ollama status ──────────────────────────────────────────────────────────
+let _ollamaPoll=null;
+async function checkOllama(){
+  try{
+    const r=await fetch('/api/v1/realtime/ollama-status/');
+    const d=await r.json();
+    const dot=document.getElementById('ollama-dot');
+    const lbl=document.getElementById('ollama-lbl');
+    const btn=document.getElementById('ollama-btn');
+    if(!d.running){
+      dot.style.background='var(--err)';
+      lbl.textContent='Ollama: not running — agents cannot execute';
+      lbl.style.color='var(--err)';
+      btn.style.display='inline-block';
+      btn.textContent='Start Ollama';
+      btn.onclick=startOllama;
+    } else if(!d.model_ready){
+      dot.style.background='var(--warn)';
+      let hint = `Ollama running but "${d.configured_model}" not visible`;
+      if(d.running_models_path && d.models_path && d.running_models_path !== d.models_path){
+        hint += ` — Ollama is using ${d.running_models_path} but models are in ${d.models_path}`;
+      } else if(d.models_path){
+        hint += ` — click Restart to use ${d.models_path}`;
+      }
+      lbl.textContent=hint;
+      lbl.style.color='var(--warn)';
+      btn.style.display='inline-block';
+      btn.textContent='Restart Ollama';
+      btn.onclick=startOllama;
+    } else {
+      dot.style.background='var(--ok)';
+      lbl.textContent=`Ollama: active — ${d.configured_model} ready`;
+      lbl.style.color='var(--ok)';
+      btn.style.display='none';
+      btn.onclick=startOllama;
+    }
+  } catch(e){/* ignore */}
+}
+
+async function pullModel(model){
+  toast(`Run in terminal: ollama pull ${model}`);
+}
+
+async function startOllama(){
+  const btn=document.getElementById('ollama-btn');
+  btn.textContent='Starting…'; btn.disabled=true;
+  const r=await fetch('/api/v1/realtime/ollama-start/',{method:'POST',headers:{'X-CSRFToken':getCookie('csrftoken')}});
+  const d=await r.json();
+  toast(d.message, r.ok);
+  setTimeout(()=>{btn.disabled=false;btn.textContent='Start';checkOllama();}, 5000);
 }
 
 // ── initial load ───────────────────────────────────────────────────────────
@@ -647,7 +770,7 @@ function connectSSE(){
     'LOCK_ACQUIRED','LOCK_RELEASED','LOCK_EXPIRED','REQUIREMENT_CREATED','REQUIREMENT_REVIEWED','REQUIREMENT_APPROVED','REQUIREMENT_REJECTED',
     'ARCHITECTURE_SUBMITTED','ARCHITECTURE_APPROVED','ARCHITECTURE_CHANGES_REQUESTED',
     'PR_CREATED','PR_OPENED','PR_APPROVED','PR_CHANGES_REQUESTED','PR_MERGED','PR_CLOSED',
-    'PLANNING_STEP'];
+    'PLANNING_STEP','AGENT_LOG'];
   EVTS.forEach(ev=>{
     es.addEventListener(ev,e=>{
       const d=JSON.parse(e.data);
@@ -682,6 +805,26 @@ function applyStateChange(evType,data){
   if(evType==='LOCK_RELEASED'||evType==='LOCK_EXPIRED'){
     delete lockData[data.entity_id]; renderLocks();
   }
+  if(evType==='AGENT_LOG'){
+    const log=document.getElementById('agent-log');
+    if(log){
+      const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      const step=p.step||'';const detail=p.detail||'';const agent=p.agent||'Agent';
+      const colors={
+        STARTING:'var(--accent2)',ASSIGNED:'var(--info)',LLM_CALL:'var(--warn)',
+        LLM_DONE:'var(--ok)',FILES_WRITTEN:'var(--ok)',LLM_EMPTY:'var(--err)',
+        LLM_ERROR:'var(--err)',LLM_TIMEOUT:'var(--err)',LLM_QUEUED:'var(--muted)'
+      };
+      const color=colors[step]||'var(--text)';
+      const row=document.createElement('div');
+      row.style.marginBottom='3px';
+      row.innerHTML=`<span style="color:var(--border)">${t}</span> <span style="color:var(--accent);font-weight:600">${esc(agent)}</span> <span style="color:${color};font-weight:600">${esc(step)}</span> <span style="color:var(--muted)">${esc(detail)}</span>`;
+      if(log.querySelector('span')) log.innerHTML='';
+      log.insertBefore(row,log.firstChild);
+      while(log.children.length>100) log.removeChild(log.lastChild);
+    }
+  }
+
   if(evType==='PLANNING_STEP'){
     // Push directly into the planning log without waiting for poll
     const log=document.getElementById('planning-log');
@@ -719,6 +862,56 @@ function applyStateChange(evType,data){
 function _selectedProductId(){
   const sel=document.getElementById('loop-product-sel');
   return sel?parseInt(sel.value)||null:null;
+}
+
+function showActionResp(msg, ok=true){
+  const el=document.getElementById('action-resp');
+  if(!el) return;
+  el.textContent=msg;
+  el.style.color=ok?'var(--ok)':'var(--err)';
+  el.style.display='block';
+  clearTimeout(el._t);
+  el._t=setTimeout(()=>{el.style.display='none';},5000);
+}
+
+async function dispatchAll(){
+  const pid=_selectedProductId()||parseInt(Object.keys(productData)[0])||null;
+  if(!pid){toast('No products found','err');return;}
+  const {ok,data}=await api('POST',`/api/v1/workflow/products/${pid}/dispatch_ready/`);
+  if(ok){
+    (data.tasks||[]).forEach(t=>{taskData[t.id]=t;});
+    renderAll();
+    const n=data.tasks?.length||0;
+    showActionResp(n>0?`Dispatched ${n} task(s) to READY`:'No tasks ready to dispatch');
+    toast(n>0?`Dispatched ${n} task(s)`:'Nothing to dispatch');
+  } else {
+    showActionResp('Dispatch failed: '+JSON.stringify(data),false);
+  }
+}
+
+async function dispatchProduct(productId){
+  const {ok,data}=await api('POST',`/api/v1/workflow/products/${productId}/dispatch_ready/`);
+  if(ok){
+    (data.tasks||[]).forEach(t=>{taskData[t.id]=t;});
+    renderAll();
+    toast(`Dispatched ${data.tasks?.length||0} task(s)`);
+  }
+}
+
+async function rerunTask(taskId){
+  // Reset task to READY and run loop to execute it
+  const {ok,data}=await api('POST',`/api/v1/workflow/tasks/${taskId}/rerun/`);
+  if(ok){
+    taskData[data.id]=data;
+    renderAll();
+    toast('Task queued for re-execution');
+    // Kick off the loop to pick it up immediately
+    runLoop();
+  } else {
+    // Fallback: just run the loop — it will re-queue CHANGES_REQUESTED tasks
+    toast('Running loop to re-execute task…');
+    runLoop();
+  }
 }
 
 async function runLoop(){
@@ -948,7 +1141,12 @@ async function loadFile(taskId, filePath){
 }
 
 // ── boot ───────────────────────────────────────────────────────────────────
-loadAll().then(()=>{connectSSE();populateCodeTaskSelect();});
+loadAll().then(()=>{
+  connectSSE();
+  populateCodeTaskSelect();
+  checkOllama();
+  setInterval(checkOllama, 30000);  // re-check every 30s
+});
 </script>
 </body>
 </html>

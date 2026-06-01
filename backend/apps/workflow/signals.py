@@ -98,8 +98,8 @@ def on_architecture_saved(sender, instance, created, **kwargs):
 
 
 def _dispatch_ready_async(product_id: int) -> None:
-    """Dispatch in a background thread to avoid blocking the save."""
-    import threading
+    """Submit dispatch work to the shared pool (never spawns a raw thread)."""
+    from apps.workflow.autonomous.thread_pool import submit
 
     def _do():
         from django.db import close_old_connections
@@ -112,7 +112,7 @@ def _dispatch_ready_async(product_id: int) -> None:
         except Exception:
             logger.exception("Signal cascade dispatch failed for product %d", product_id)
 
-    threading.Thread(target=_do, daemon=True, name=f"dispatch-{product_id}").start()
+    submit(_do)
 
 
 # ── Task ─────────────────────────────────────────────────────────────────────
@@ -210,7 +210,7 @@ def on_pr_saved(sender, instance, created, **kwargs):
 
 
 def _on_pr_merged_async(task_id: int) -> None:
-    import threading
+    from apps.workflow.autonomous.thread_pool import submit
 
     def _do():
         from django.db import close_old_connections
@@ -227,4 +227,4 @@ def _on_pr_merged_async(task_id: int) -> None:
         except Exception:
             logger.exception("PR merged cascade failed for task %d", task_id)
 
-    threading.Thread(target=_do, daemon=True, name=f"pr-merge-{task_id}").start()
+    submit(_do)

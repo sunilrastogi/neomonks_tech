@@ -154,20 +154,16 @@ class AutonomousLoop:
                 logger.debug("Loop: planner already running for req %d", req.id)
                 continue
             logger.info("Loop: spawning planner for req %d — %s", req.id, req.title)
-            t = threading.Thread(
-                target=self._run_planner,
-                args=(req.id, AutonomousPlanner()),
-                daemon=True,
-                name=f"planner-{req.id}",
-            )
-            self._planning_threads[req.id] = t
-            t.start()
+            from apps.workflow.autonomous.thread_pool import submit
+            future = submit(self._run_planner, req.id, AutonomousPlanner())
+            # Store future so we can check is_alive equivalent via future.done()
+            self._planning_threads[req.id] = future
             summary["planned"] += 1
 
         # Update status
         with _status_lock:
             _loop_status["active_planners"] = [
-                rid for rid, t in self._planning_threads.items() if t.is_alive()
+                rid for rid, f in self._planning_threads.items() if not f.done()
             ]
 
         # ── 2. DISPATCH ──────────────────────────────────────────────────

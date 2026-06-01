@@ -22,7 +22,7 @@ import threading
 from pathlib import Path
 
 from django.conf import settings
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
 
 from apps.workflow.models import (
@@ -90,17 +90,36 @@ ROLE_LABELS = {
 def product_workspace(product_slug: str) -> Path:
     """
     Root of the product's actual codebase: products/{slug}/
-    This is where agents write code — same folder that runs in production.
-    Falls back to workspace/{slug}/ if the products folder doesn't exist yet.
+    Tries multiple slug normalisations (hyphen vs underscore) so that a product
+    created with slug 'expense-tracker' finds the folder 'products/expense_tracker'.
+    Falls back to workspace/{slug}/ if no products/ folder is found.
     """
-    from apps.workflow.autonomous.scaffolder import PRODUCTS_DIR
-    product_dir = PRODUCTS_DIR / product_slug
-    if product_dir.exists():
-        return product_dir
-    # Fallback: legacy workspace location
-    base: Path = getattr(settings, "WORKFLOW_WORKSPACE", Path(settings.BASE_DIR) / "workspace")
-    fallback = Path(base) / product_slug
+    try:
+        from apps.workflow.autonomous.scaffolder import PRODUCTS_DIR
+    except Exception as exc:
+        logger.warning("Could not import PRODUCTS_DIR from scaffolder: %s", exc)
+        base = Path(getattr(settings, "WORKFLOW_WORKSPACE", Path(settings.BASE_DIR) / "workspace"))
+        p = base / product_slug
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
+    # Try the slug as-is, then with hyphens→underscores, then underscores→hyphens
+    candidates = [
+        product_slug,
+        product_slug.replace("-", "_"),
+        product_slug.replace("_", "-"),
+    ]
+    for candidate in candidates:
+        p = PRODUCTS_DIR / candidate
+        if p.exists():
+            logger.info("Workspace: resolved '%s' → products/%s", product_slug, candidate)
+            return p
+
+    # Nothing found — create a workspace fallback (do NOT write into products/ silently)
+    base = Path(getattr(settings, "WORKFLOW_WORKSPACE", Path(settings.BASE_DIR) / "workspace"))
+    fallback = base / product_slug
     fallback.mkdir(parents=True, exist_ok=True)
+    logger.warning("Workspace: products/%s not found — writing to workspace/%s", product_slug, product_slug)
     return fallback
 
 
@@ -166,39 +185,47 @@ def _get_or_init_repo(workspace: Path):
     """Return a gitpython Repo rooted at workspace, creating one if needed."""
     from git import InvalidGitRepositoryError, Repo
 
-    # Walk up to find an existing repo; if none, init at workspace root
     try:
         return Repo(workspace, search_parent_directories=True)
     except InvalidGitRepositoryError:
         repo = Repo.init(workspace)
-        # Create an initial empty commit so branches can be checked out
-        repo.index.commit("chore: init workspace [autonomous]")
         logger.info("Git: initialised new repo at %s", workspace)
+        # Create an initial commit so branches can be checked out later
+        readme = workspace / ".neomonks"
+        readme.write_text("NeoMonks autonomous workspace\n")
+        repo.index.add([".neomonks"])
+        repo.index.commit("chore: init workspace [autonomous]")
         return repo
 
 
 def _git_commit_local(workspace: Path, branch: str, task_title: str) -> bool:
     """
-    Always commit locally — even in simulation mode (no GitHub token).
-    Returns True on success.
+    Stage all changes and commit on the current branch, then create/switch to
+    the task branch.  We commit FIRST (while files are staged) because
+    `git checkout -b` fails on a dirty working tree.
     """
     try:
         repo = _get_or_init_repo(workspace)
 
-        # Checkout or create the branch
-        branch_names = [b.name for b in repo.branches]
-        if branch in branch_names:
-            repo.git.checkout(branch)
-        else:
-            repo.git.checkout("-b", branch)
-
+        # 1. Stage and commit whatever was just written
         repo.git.add(".")
-        if repo.is_dirty(index=True) or repo.untracked_files:
+        has_changes = repo.is_dirty(index=True) or bool(repo.untracked_files)
+        if has_changes:
+            # git requires user identity — set it locally if not configured
+            with repo.config_writer() as cfg:
+                if not cfg.has_option("user", "email"):
+                    cfg.set_value("user", "email", "neomonks@autonomous.local")
+                    cfg.set_value("user", "name", "NeoMonks Agent")
             repo.git.add(".")
             repo.index.commit(f"feat: {task_title} [autonomous]")
-            logger.info("Git: committed to branch '%s'", branch)
-        else:
-            logger.info("Git: nothing to commit on branch '%s'", branch)
+            logger.info("Git: committed '%s'", task_title)
+
+        # 2. Now switch to / create the task branch (tree is clean)
+        branch_names = [b.name for b in repo.branches]
+        if branch not in branch_names:
+            repo.git.branch(branch)       # create branch pointing to this commit
+            logger.info("Git: created branch '%s'", branch)
+        # (stay on current branch — branch is just a pointer for PR purposes)
         return True
     except Exception as exc:
         logger.warning("Git local commit failed: %s", exc)
@@ -269,9 +296,9 @@ class AutonomousExecutor:
     """Executes a single READY task autonomously in a background thread."""
 
     def execute_in_background(self, task_id: int) -> None:
-        """Spawn a thread to execute the task; returns immediately."""
-        t = threading.Thread(target=self._run, args=(task_id,), daemon=True, name=f"task-{task_id}")
-        t.start()
+        """Submit task execution to the shared thread pool."""
+        from apps.workflow.autonomous.thread_pool import submit
+        submit(self._run, task_id)
 
     def _run(self, task_id: int) -> None:
         from django.db import close_old_connections
@@ -338,9 +365,11 @@ class AutonomousExecutor:
             "status": "IN_PROGRESS",
             "product_id": task.product_id,
         })
+        self._emit_agent_log(task.id, agent_profile.display_name,
+                             "ASSIGNED", f"Picked up task: {task.title}")
         logger.info("Executor: task %d assigned to %s → IN_PROGRESS", task_id, agent_profile.display_name)
 
-        # 5. Run the CrewAI agent
+        # 5. Run agent (direct Ollama call)
         code_output = self._run_agent(task, agent_profile, planned_files)
 
         # 6. Write output files into products/{slug}/
@@ -358,6 +387,8 @@ class AutonomousExecutor:
                     full_path = workspace / rel_path
                 full_path.parent.mkdir(parents=True, exist_ok=True)
                 full_path.write_text(content, encoding="utf-8")
+            self._emit_agent_log(task_id, agent_profile.display_name,
+                                 "FILES_WRITTEN", f"Wrote {len(written_files)} file(s) to {workspace.name}")
             logger.info("Executor: wrote %d files to %s for task %d",
                         len(written_files), workspace, task_id)
         else:
@@ -379,7 +410,7 @@ class AutonomousExecutor:
 
         # 8. Create PR
         pr_url = _create_github_pr(branch, task.title, task.description) or \
-                 f"http://localhost:8000/api/v1/workflow/tasks/{task.id}/"  # local fallback
+                 f"http://localhost:8000/api/v1/realtime/pr-review/{task.id}/"  # local review page
 
         # 9. Create PullRequestRecord
         with transaction.atomic():
@@ -414,53 +445,107 @@ class AutonomousExecutor:
 
     @staticmethod
     def _pick_agent(task: Task) -> AgentProfile | None:
-        """Find an enabled agent for this role that isn't already busy."""
-        busy_agents = set(
-            Task.objects.filter(
-                status__in=[TaskStatus.IN_PROGRESS, TaskStatus.IN_REVIEW],
-                owner_role=task.owner_role,
-            ).values_list("assigned_agent", flat=True)
-        )
-        return (
+        """
+        Find the least-loaded enabled agent for this role.
+        AI agents can run multiple tasks concurrently — no hard busy exclusion.
+        Auto-creates a profile if the role has no agent registered.
+        """
+        # Get all enabled agents for this role
+        role_agents = list(
             AgentProfile.objects.filter(role=task.owner_role, enabled=True)
-            .exclude(display_name__in=busy_agents)
-            .first()
         )
+
+        if role_agents:
+            # Pick the one with fewest active tasks
+            def _active_count(agent):
+                return Task.objects.filter(
+                    assigned_agent=agent.display_name,
+                    status__in=[TaskStatus.IN_PROGRESS, TaskStatus.IN_REVIEW],
+                ).count()
+
+            role_agents.sort(key=_active_count)
+            return role_agents[0]
+
+        # No role-matched agent — auto-create so the workflow is never stuck
+        logger.warning("No agent for role %s — auto-creating profile", task.owner_role)
+        role_label = task.owner_role.replace("_", " ").title()
+        agent, created = AgentProfile.objects.get_or_create(
+            display_name=f"Auto {role_label}",
+            defaults={
+                "role": task.owner_role,
+                "model_name": getattr(settings, "DEFAULT_AGENT_MODEL", "ollama/qwen2.5-coder:7b"),
+                "enabled": True,
+                "allowed_paths": [],
+            },
+        )
+        if created:
+            logger.info("Auto-created agent: %s", agent.display_name)
+        return agent
+
+    @staticmethod
+    def _emit_agent_log(task_id: int, agent_name: str, step: str, detail: str = "") -> None:
+        """Emit an AGENT_LOG event visible on the dashboard."""
+        try:
+            WorkflowEvent.objects.create(
+                event_type="AGENT_LOG",
+                entity_type="TASK",
+                entity_id=task_id,
+                payload_json={"agent": agent_name, "step": step, "detail": detail},
+            )
+        except Exception:
+            pass
+        logger.info("Agent [%s / task %d] %s  %s", agent_name, task_id, step, detail)
 
     @staticmethod
     def _run_agent(task: Task, agent_profile: AgentProfile, planned_files: list[str]) -> str:
-        """Run the appropriate CrewAI agent and return its raw output."""
-        # Strip the __PLANNED_FILES__ marker from description shown to agent
-        clean_desc = re.sub(r"\n*__PLANNED_FILES__: \[.*?\]", "", task.description).strip()
-        files_list = "\n".join(f"  - {f}" for f in planned_files) if planned_files else "  (derive appropriate files)"
+        """Call Ollama directly (no CrewAI) to generate implementation files."""
+        from apps.workflow.autonomous.llm import call as llm_call
 
-        prompt = DEVELOPER_PROMPT.format(
-            agent_name=agent_profile.display_name,
-            role_label=ROLE_LABELS.get(task.owner_role, task.owner_role.replace("_", " ").title()),
+        clean_desc = re.sub(r"\n*__PLANNED_FILES__: \[.*?\]", "", task.description).strip()
+        files_list = "\n".join(f"  - {f}" for f in planned_files) if planned_files else "  (choose appropriate files)"
+        role_label = ROLE_LABELS.get(task.owner_role, task.owner_role.replace("_", " ").title())
+        agent_name = agent_profile.display_name
+
+        def emit(step, detail=""):
+            AutonomousExecutor._emit_agent_log(task.id, agent_name, step, detail)
+
+        emit("STARTING", f"Beginning task: {task.title}")
+
+        system_prompt = f"""You are {agent_name}, a {role_label}.
+Write complete, working code. Output ONLY file blocks in this exact format:
+=== FILE: path/to/file.ext ===
+<complete file content>
+=== END FILE ===
+No explanations. No markdown. Only file blocks."""
+
+        user_prompt = DEVELOPER_PROMPT.format(
+            agent_name=agent_name,
+            role_label=role_label,
             title=task.title,
             description=clean_desc[:3000],
             files_list=files_list,
         )
-        try:
-            from crewai import Agent as CAgent, Task as CTask, Crew
 
-            llm = agent_profile.model_name or getattr(settings, "DEFAULT_AGENT_MODEL", "ollama/qwen2.5-coder:7b")
-            agent = CAgent(
-                role=ROLE_LABELS.get(task.owner_role, task.owner_role),
-                goal=f"Complete the task: {task.title}",
-                backstory=f"You are {agent_profile.display_name}, an expert {ROLE_LABELS.get(task.owner_role, 'developer')}.",
-                llm=llm,
-                verbose=False,
-            )
-            ctask = CTask(description=prompt, agent=agent, expected_output="implementation files")
-            crew = Crew(agents=[agent], tasks=[ctask], verbose=False)
-            result = crew.kickoff()
-            return str(result)
-        except Exception as exc:
-            logger.warning("Executor: CrewAI failed for task %d: %s", task.id, exc)
-            # Return a stub so the executor still produces a file
-            clean_desc2 = re.sub(r"\n*__PLANNED_FILES__: \[.*?\]", "", task.description).strip()
+        emit("LLM_CALL", f"Sending task to {agent_profile.model_name or 'qwen2.5-coder:7b'}")
+        raw = llm_call(user_prompt, system=system_prompt, emit_log=emit)
+
+        if raw:
+            file_count = raw.count("=== FILE:")
+            emit("LLM_DONE", f"Model responded ({len(raw)} chars, ~{file_count} file blocks)")
+        else:
+            emit("LLM_EMPTY", "Model returned no output — writing stubs")
+
+        if not raw:
+            # Write meaningful stubs so the branch has content
             stubs = ""
-            for fp in (planned_files or ["output/stub.py"]):
-                stubs += f"=== FILE: {fp} ===\n# TODO: implement {task.title}\n# {clean_desc2[:200]}\n=== END FILE ===\n\n"
+            for fp in (planned_files or [f"output/task_{task.id}_stub.py"]):
+                stubs += (
+                    f"=== FILE: {fp} ===\n"
+                    f"# Task: {task.title}\n"
+                    f"# Agent: {agent_name}\n"
+                    f"# TODO: {clean_desc[:300]}\n"
+                    f"=== END FILE ===\n\n"
+                )
             return stubs
+
+        return raw
