@@ -837,6 +837,7 @@ function applyStateChange(evType,data){
         LLM_DONE:'var(--ok)',FILES_WRITTEN:'var(--ok)',LLM_EMPTY:'var(--err)',
         LLM_ERROR:'var(--err)',LLM_TIMEOUT:'var(--err)',LLM_QUEUED:'var(--muted)',
         LLM_UNAVAILABLE:'var(--err)',RESOURCE_UNAVAILABLE:'var(--err)',
+        LLM_OOM:'var(--err)',LLM_RETRY:'var(--warn)',
       };
       const color=colors[step]||'var(--text)';
       const row=document.createElement('div');
