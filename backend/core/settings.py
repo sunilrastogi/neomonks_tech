@@ -37,6 +37,10 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework',
+    'django_filters',
+    'apps.realtime',
+    'apps.workflow',
 ]
 
 MIDDLEWARE = [
@@ -54,7 +58,7 @@ ROOT_URLCONF = 'core.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -120,3 +124,39 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ── Autonomous workflow settings ──────────────────────────────────────────────
+import os
+
+# Directory where agent-written code is stored (one sub-dir per product/branch)
+WORKFLOW_WORKSPACE = BASE_DIR / 'workspace'
+
+# GitHub integration (set these as env vars in production)
+GITHUB_TOKEN      = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO       = os.environ.get('GITHUB_REPO', '')       # e.g. "org/repo"
+GITHUB_BASE_BRANCH = os.environ.get('GITHUB_BASE_BRANCH', 'main')
+
+# Default LLM model for CrewAI agents
+DEFAULT_AGENT_MODEL = os.environ.get('DEFAULT_AGENT_MODEL', 'ollama/qwen2.5-coder:7b')
+
+# Loop timing
+LOOP_POLL_INTERVAL   = int(os.environ.get('LOOP_POLL_INTERVAL', 10))    # seconds between loop ticks
+LOOP_PR_SYNC_INTERVAL = int(os.environ.get('LOOP_PR_SYNC_INTERVAL', 3600))  # PR sync every hour
+
+
+# REST Framework
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ],
+}

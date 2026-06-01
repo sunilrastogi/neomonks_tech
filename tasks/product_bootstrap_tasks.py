@@ -1,5 +1,5 @@
 from crewai import Task
-from agents.infra_admin import infra_admin
+from agents.vikram_singh_infra_admin import vikram_singh
 
 bootstrap_product_task = Task(
     description="""
@@ -37,5 +37,5 @@ bootstrap_product_task = Task(
     expected_output="""
     Strictly structured filesystem output.
     """,
-    agent=infra_admin
+    agent=vikram_singh
 )

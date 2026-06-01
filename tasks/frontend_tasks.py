@@ -1,5 +1,5 @@
 from crewai import Task
-from agents.frontend_dev import frontend_dev
+from agents.priya_nair_frontend_dev import priya_nair
 
 frontend_login_task = Task(
     description="""
@@ -26,5 +26,5 @@ frontend_login_task = Task(
     expected_output="""
     Production-ready React login page.
     """,
-    agent=frontend_dev
+    agent=priya_nair
 )
