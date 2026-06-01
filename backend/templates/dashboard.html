@@ -176,9 +176,10 @@
   <span class="tagline">Autonomous Workflow</span>
   <nav class="tabs">
     <div class="tab on" data-pg="pipeline">Pipeline</div>
+    <div class="tab" data-pg="requirements">Requirements</div>
     <div class="tab" data-pg="board">Task Board</div>
     <div class="tab" data-pg="code">Code</div>
-    <div class="tab" data-pg="upload">Upload Requirement</div>
+    <div class="tab" data-pg="upload">+ New Requirement</div>
   </nav>
   <span class="loop-badge stopped" id="loop-badge">Loop: stopped</span>
   <span class="dot" id="dot" style="margin-left:12px"></span>
@@ -289,6 +290,27 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- ── REQUIREMENTS tab ── -->
+  <div class="page" id="pg-requirements">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <span style="font-size:14px;font-weight:700">Requirements</span>
+      <span style="font-size:11px;color:var(--muted)">Click a requirement to view or edit its document</span>
+      <button class="btn btn-gh" style="margin-left:auto;font-size:11px;padding:5px 12px" onclick="loadRequirements()">&#8635; Refresh</button>
+    </div>
+    <div id="req-list-panel" style="display:grid;grid-template-columns:320px 1fr;gap:14px;min-height:400px">
+      <!-- Left: requirement list -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;overflow:hidden">
+        <div id="req-list-items" style="overflow-y:auto;max-height:calc(100vh - 200px)">
+          <div style="padding:20px;color:var(--muted);font-size:12px">Loading…</div>
+        </div>
+      </div>
+      <!-- Right: requirement viewer/editor -->
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:10px" id="req-detail-panel">
+        <div style="color:var(--muted);font-size:12px;margin:auto">Select a requirement to view its document</div>
+      </div>
+    </div>
   </div>
 
   <!-- ── BOARD tab ── -->
@@ -813,7 +835,8 @@ function applyStateChange(evType,data){
       const colors={
         STARTING:'var(--accent2)',ASSIGNED:'var(--info)',LLM_CALL:'var(--warn)',
         LLM_DONE:'var(--ok)',FILES_WRITTEN:'var(--ok)',LLM_EMPTY:'var(--err)',
-        LLM_ERROR:'var(--err)',LLM_TIMEOUT:'var(--err)',LLM_QUEUED:'var(--muted)'
+        LLM_ERROR:'var(--err)',LLM_TIMEOUT:'var(--err)',LLM_QUEUED:'var(--muted)',
+        LLM_UNAVAILABLE:'var(--err)',RESOURCE_UNAVAILABLE:'var(--err)',
       };
       const color=colors[step]||'var(--text)';
       const row=document.createElement('div');
@@ -826,18 +849,26 @@ function applyStateChange(evType,data){
   }
 
   if(evType==='PLANNING_STEP'){
-    // Push directly into the planning log without waiting for poll
     const log=document.getElementById('planning-log');
     if(log){
       const t=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});
-      const step=p.step||'';const detail=p.detail||'';
-      const color=step==='FAILED'?'var(--err)':step==='LLM_CALL'?'var(--warn)':step==='LLM_DONE'||step==='TASKS_CREATED'?'var(--ok)':'var(--muted)';
+      const step=p.step||''; const detail=p.detail||'';
+      const isPO = typeof PO_STEPS!=='undefined' && PO_STEPS.has(step);
+      const isSA = typeof SA_STEPS!=='undefined' && SA_STEPS.has(step);
+      const color = step==='FAILED'||step==='LLM_UNAVAILABLE'?'var(--err)'
+        : step==='LLM_CALL'||step==='LLM_QUEUED'?'var(--warn)'
+        : step==='LLM_DONE'||step==='TASKS_CREATED'||step==='DISPATCHED'?'var(--ok)'
+        : 'var(--muted)';
+      const roleTag = isPO
+        ? `<span style="color:var(--accent);font-weight:700">[PO]</span>`
+        : isSA
+        ? `<span style="color:var(--accent2);font-weight:700">[SA]</span>`
+        : `<span style="color:var(--muted)">[loop]</span>`;
       const row=document.createElement('div');
       row.style.marginBottom='3px';
-      row.innerHTML=`<span style="color:var(--border)">${t}</span> <span style="color:${color};font-weight:600">[req ${data.entity_id}]</span> <span style="color:${color}">${esc(step)}</span> <span style="color:var(--muted)">${esc(detail)}</span>`;
-      if(log.querySelector('.empty-msg')||log.firstChild?.tagName==='SPAN') log.innerHTML='';
+      row.innerHTML=`<span style="color:var(--border)">${t}</span> ${roleTag} <span style="color:${color};font-weight:600">${esc(step)}</span> <span style="color:var(--muted)">${esc(detail)}</span>`;
+      if(log.firstChild?.tagName==='SPAN') log.innerHTML='';
       log.insertBefore(row,log.firstChild);
-      // Start status polling to keep counters fresh
       startStatusPolling();
     }
   }
@@ -1140,12 +1171,102 @@ async function loadFile(taskId, filePath){
   document.getElementById('code-filesize').textContent=`${data.size} bytes`;
 }
 
+// ── Requirements tab ──────────────────────────────────────────────────────
+let _selectedReqId = null;
+
+async function loadRequirements(){
+  const {ok, data} = await api('GET', '/api/v1/workflow/requirements/?page_size=200');
+  if(!ok) return;
+  const reqs = (data.results || data).sort((a,b)=>b.id-a.id);
+  const el = document.getElementById('req-list-items');
+  if(!reqs.length){
+    el.innerHTML='<div style="padding:20px;color:var(--muted);font-size:12px">No requirements yet.</div>';
+    return;
+  }
+  const statusColor = {
+    RECEIVED:'var(--warn)', UNDER_REVIEW:'var(--accent)',
+    APPROVED:'var(--ok)', REJECTED:'var(--err)',
+  };
+  el.innerHTML = reqs.map(r=>`
+    <div class="req-list-item" id="rli-${r.id}"
+      onclick="openRequirement(${r.id})"
+      style="padding:10px 14px;border-bottom:1px solid var(--border);cursor:pointer;
+             transition:.15s;${_selectedReqId===r.id?'background:rgba(99,102,241,.1)':''}">
+      <div style="font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.title)}</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:3px">
+        <span style="font-size:10px;color:${statusColor[r.status]||'var(--muted)'};font-weight:600">${r.status}</span>
+        <span style="font-size:10px;color:var(--muted)">${esc(r.product_name||'')}</span>
+      </div>
+    </div>`).join('');
+}
+
+async function openRequirement(reqId){
+  _selectedReqId = reqId;
+  // Highlight selected
+  document.querySelectorAll('.req-list-item').forEach(el=>{
+    el.style.background = el.id===`rli-${reqId}` ? 'rgba(99,102,241,.1)' : '';
+  });
+  const panel = document.getElementById('req-detail-panel');
+  panel.innerHTML = '<div style="color:var(--muted);font-size:12px;margin:auto">Loading…</div>';
+  const {ok, data} = await api('GET', `/api/v1/realtime/requirement-file/${reqId}/`);
+  if(!ok){ panel.innerHTML='<div style="color:var(--err);font-size:12px">Failed to load</div>'; return; }
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:13px;font-weight:700;flex:1">${esc(data.title)}</span>
+      <span style="font-size:10px;color:var(--muted)">${esc(data.product)}</span>
+      <span style="font-size:10px;font-weight:600;color:var(--ok)">${esc(data.status)}</span>
+      <button class="btn btn-p" style="font-size:11px;padding:5px 12px" onclick="saveRequirement(${reqId})">Save</button>
+      <button class="btn btn-i" style="font-size:11px;padding:5px 12px" onclick="replanRequirement(${reqId})">Re-plan</button>
+    </div>
+    <div style="font-size:10px;color:var(--muted)">
+      ${data.file_path ? 'File: '+esc(data.file_path) : 'File not yet saved (will be created on next planning run)'}
+    </div>
+    <textarea id="req-editor-${reqId}"
+      style="flex:1;min-height:400px;background:var(--bg);border:1px solid var(--border);color:var(--text);
+             border-radius:6px;padding:10px;font-family:monospace;font-size:12px;resize:vertical;line-height:1.6"
+    >${esc(data.content)}</textarea>
+    <div id="req-save-resp-${reqId}" style="font-size:11px;color:var(--muted)"></div>
+  `;
+}
+
+async function saveRequirement(reqId){
+  const ta = document.getElementById(`req-editor-${reqId}`);
+  const resp_el = document.getElementById(`req-save-resp-${reqId}`);
+  if(!ta) return;
+  const {ok} = await api('POST', `/api/v1/realtime/requirement-file/${reqId}/save/`, {content: ta.value});
+  resp_el.textContent = ok ? 'Saved.' : 'Save failed.';
+  resp_el.style.color = ok ? 'var(--ok)' : 'var(--err)';
+  setTimeout(()=>{ resp_el.textContent=''; }, 3000);
+}
+
+async function replanRequirement(reqId){
+  const {ok} = await api('POST', `/api/v1/workflow/requirements/${reqId}/plan/`);
+  toast(ok ? 'Re-planning started — watch Pipeline tab' : 'Re-plan failed', ok);
+}
+
+// Load requirements when the tab is opened
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    if(t.dataset.pg === 'requirements') loadRequirements();
+  });
+});
+
+// ── planning log: label PO vs SA steps ────────────────────────────────────
+const PO_STEPS  = new Set(['PO_READING','PO_DONE','REQ_SAVED','DISPATCHED','TASKS_CREATED','ARTIFACT_SAVED','DESIGN_PARSED','FALLBACK']);
+const SA_STEPS  = new Set(['ARCHITECT_DESIGNING','LLM_CALL','LLM_QUEUED','LLM_DONE','LLM_TIMEOUT','LLM_ERROR','LLM_UNAVAILABLE']);
+
+function _planningStepLabel(step){
+  if(PO_STEPS.has(step))  return '[PO] ';
+  if(SA_STEPS.has(step))  return '[SA] ';
+  return '';
+}
+
 // ── boot ───────────────────────────────────────────────────────────────────
 loadAll().then(()=>{
   connectSSE();
   populateCodeTaskSelect();
   checkOllama();
-  setInterval(checkOllama, 30000);  // re-check every 30s
+  setInterval(checkOllama, 30000);
 });
 </script>
 </body>

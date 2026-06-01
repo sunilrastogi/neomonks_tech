@@ -172,30 +172,44 @@ class AutonomousLoop:
             summary["dispatched"] += len(dispatched)
 
         # ── 3. EXECUTION ─────────────────────────────────────────────────
+        # Only ONE task runs at a time — the LLM semaphore already serialises
+        # model calls but queuing many tasks simultaneously wastes RAM.
         executor = AutonomousExecutor()
-        ready_tasks = Task.objects.filter(
-            status=TaskStatus.READY,
-            assigned_agent__isnull=True,
+        in_progress_count = Task.objects.filter(
+            status=TaskStatus.IN_PROGRESS,
             product_id__in=product_ids,
-        ).order_by("order_index", "id")
+        ).count()
 
-        for task in ready_tasks:
-            logger.info("Loop: executing task %d — %s", task.id, task.title)
-            executor.execute_in_background(task.id)
-            summary["executed"] += 1
+        if in_progress_count == 0:
+            ready_task = Task.objects.filter(
+                status=TaskStatus.READY,
+                assigned_agent__isnull=True,
+                product_id__in=product_ids,
+            ).order_by("order_index", "id").first()
+
+            if ready_task:
+                logger.info("Loop: executing task %d — %s", ready_task.id, ready_task.title)
+                executor.execute_in_background(ready_task.id)
+                summary["executed"] += 1
+                with _status_lock:
+                    _loop_status["active_executors"] = [ready_task.id]
+        else:
+            logger.info("Loop: %d task(s) IN_PROGRESS — skipping execution this tick", in_progress_count)
 
         # ── 4. REWORK ────────────────────────────────────────────────────
-        rework_tasks = Task.objects.filter(
-            status=TaskStatus.CHANGES_REQUESTED,
-            product_id__in=product_ids,
-        ).order_by("id")
-        for task in rework_tasks:
-            logger.info("Loop: re-executing task %d (changes requested)", task.id)
-            task.status = TaskStatus.READY
-            task.assigned_agent = None
-            task.save(update_fields=["status", "assigned_agent", "updated_at"])
-            executor.execute_in_background(task.id)
-            summary["executed"] += 1
+        # Re-queue only when nothing is running
+        if in_progress_count == 0 and summary["executed"] == 0:
+            rework_task = Task.objects.filter(
+                status=TaskStatus.CHANGES_REQUESTED,
+                product_id__in=product_ids,
+            ).order_by("id").first()
+            if rework_task:
+                logger.info("Loop: re-executing task %d (changes requested)", rework_task.id)
+                rework_task.status = TaskStatus.READY
+                rework_task.assigned_agent = None
+                rework_task.save(update_fields=["status", "assigned_agent", "updated_at"])
+                executor.execute_in_background(rework_task.id)
+                summary["executed"] += 1
 
         # ── 5. PR SYNC ───────────────────────────────────────────────────
         now = time.monotonic()

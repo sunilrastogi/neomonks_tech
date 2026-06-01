@@ -190,6 +190,80 @@ def loop_status(request: HttpRequest) -> JsonResponse:
 
 
 @require_GET
+def requirement_file(request: HttpRequest, req_id: int) -> JsonResponse:
+    """GET /api/v1/realtime/requirement-file/{req_id}/
+    Returns the raw markdown content of the saved requirement file so the dashboard
+    can display (and allow editing of) the requirement document.
+    """
+    from apps.workflow.models import Requirement
+    from apps.workflow.autonomous.executor import product_workspace
+    import re as _re
+
+    try:
+        req = Requirement.objects.select_related("product").get(id=req_id)
+    except Requirement.DoesNotExist:
+        return JsonResponse({"error": "Not found"}, status=404)
+
+    ws = product_workspace(req.product.slug)
+    req_dir = ws / "requirements"
+    safe_title = _re.sub(r"[^\w\-]", "_", req.title)[:60]
+    req_file = req_dir / f"REQ-{req.id:04d}-{safe_title}.md"
+
+    if req_file.exists():
+        content = req_file.read_text(encoding="utf-8")
+    else:
+        content = (
+            f"# {req.title}\n\n"
+            f"**Product:** {req.product.name}  \n"
+            f"**Status:** {req.status}  \n\n"
+            f"## Summary\n\n{req.summary or ''}\n\n"
+            f"## Details\n\n{req.source_document or ''}\n"
+        )
+
+    return JsonResponse({
+        "req_id": req_id,
+        "title": req.title,
+        "product": req.product.name,
+        "status": req.status,
+        "file_path": str(req_file) if req_file.exists() else None,
+        "content": content,
+    })
+
+
+from django.views.decorators.http import require_POST as _require_POST
+
+@_require_POST
+def requirement_file_save(request: HttpRequest, req_id: int) -> JsonResponse:
+    """POST /api/v1/realtime/requirement-file/{req_id}/save/
+    Saves updated markdown content back to the requirement file.
+    """
+    import json as _json
+    import re as _re
+    from apps.workflow.models import Requirement
+    from apps.workflow.autonomous.executor import product_workspace
+
+    try:
+        req = Requirement.objects.select_related("product").get(id=req_id)
+    except Requirement.DoesNotExist:
+        return JsonResponse({"error": "Not found"}, status=404)
+
+    try:
+        body = _json.loads(request.body)
+        content = body.get("content", "")
+    except Exception:
+        return JsonResponse({"error": "Invalid JSON body"}, status=400)
+
+    ws = product_workspace(req.product.slug)
+    req_dir = ws / "requirements"
+    req_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = _re.sub(r"[^\w\-]", "_", req.title)[:60]
+    req_file = req_dir / f"REQ-{req.id:04d}-{safe_title}.md"
+    req_file.write_text(content, encoding="utf-8")
+
+    return JsonResponse({"saved": True, "file_path": str(req_file)})
+
+
+@require_GET
 def event_stream(request: HttpRequest) -> StreamingHttpResponse:
     since_id = int(request.GET.get("since", 0))
     response = StreamingHttpResponse(

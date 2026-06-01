@@ -6,6 +6,13 @@ so there are no CUDA buffer allocation conflicts when multiple agents run.
 
 A global threading.Semaphore(1) ensures only ONE model call runs at a time —
 queuing subsequent requests instead of crashing with OOM errors.
+
+Return convention
+-----------------
+call() returns a (text, error) tuple:
+  - text  : model response string (may be "")
+  - error : None on success, or a short human-readable string on failure
+            e.g. "Ollama not running", "Timed out after 300s"
 """
 from __future__ import annotations
 
@@ -33,26 +40,45 @@ def _model_name() -> str:
     return m.replace("ollama/", "")
 
 
-def call(prompt: str, system: str = "", emit_log=None) -> str:
-    """
-    Call Ollama /api/generate and return the response text.
+def is_ollama_running() -> bool:
+    """Quick check — does Ollama respond at all?"""
+    host = getattr(settings, "OLLAMA_HOST", "http://localhost:11434")
+    try:
+        req_lib.get(f"{host}/api/tags", timeout=3)
+        return True
+    except Exception:
+        return False
 
-    :param prompt:    The user prompt
-    :param system:    Optional system message
-    :param emit_log:  Optional callable(step, detail) for live dashboard updates
-    :returns:         Model response text, or "" on failure
+
+def call(prompt: str, system: str = "", emit_log=None) -> tuple[str, str | None]:
+    """
+    Call Ollama /api/generate and return (response_text, error).
+
+    error is None on success, or a short human-readable string explaining
+    the failure (e.g. "Ollama not running", "Timed out after 300s").
+
+    emit_log: optional callable(step, detail) for live dashboard updates.
     """
     model = _model_name()
+
+    # Fast-fail if Ollama is not reachable at all
+    if not is_ollama_running():
+        msg = "Ollama is not running — agent cannot execute. Start Ollama and retry."
+        logger.warning("LLM: %s", msg)
+        if emit_log:
+            emit_log("LLM_UNAVAILABLE", msg)
+        return "", msg
 
     if emit_log:
         emit_log("LLM_QUEUED", f"Waiting for LLM slot (model={model})")
 
     acquired = _llm_semaphore.acquire(timeout=LLM_TIMEOUT)
     if not acquired:
-        logger.error("LLM semaphore timed out after %ds", LLM_TIMEOUT)
+        msg = f"Timed out waiting for LLM slot after {LLM_TIMEOUT}s"
+        logger.error("LLM semaphore: %s", msg)
         if emit_log:
-            emit_log("LLM_TIMEOUT", "Gave up waiting for LLM slot")
-        return ""
+            emit_log("LLM_TIMEOUT", msg)
+        return "", msg
 
     try:
         if emit_log:
@@ -64,22 +90,20 @@ def call(prompt: str, system: str = "", emit_log=None) -> str:
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "keep_alive": -1,          # keep model loaded in RAM permanently
+            "keep_alive": -1,
             "options": {
                 "temperature": 0.1,
                 "num_predict": 4096,
-                "num_gpu": num_gpu,    # 0 = CPU only
+                "num_gpu": num_gpu,
             },
         }
         if system:
             payload["system"] = system
 
-        # Model loading on CPU can take 5-10 minutes on first call — use a
-        # very long connect timeout but still cap the total request time.
         resp = req_lib.post(
             f"{OLLAMA_HOST}/api/generate",
             json=payload,
-            timeout=(600, LLM_TIMEOUT),   # (connect_timeout, read_timeout)
+            timeout=(600, LLM_TIMEOUT),
         )
         resp.raise_for_status()
         text = resp.json().get("response", "")
@@ -89,17 +113,25 @@ def call(prompt: str, system: str = "", emit_log=None) -> str:
             emit_log("LLM_DONE", f"Done in {elapsed}s ({len(text)} chars)")
 
         logger.info("LLM call: model=%s elapsed=%.1fs chars=%d", model, elapsed, len(text))
-        return text
+        return text, None
 
+    except req_lib.exceptions.ConnectionError:
+        msg = "Ollama is not running — agent cannot execute. Start Ollama and retry."
+        logger.warning("LLM connection error: %s", msg)
+        if emit_log:
+            emit_log("LLM_UNAVAILABLE", msg)
+        return "", msg
     except req_lib.exceptions.Timeout:
-        logger.warning("LLM call timed out after %ds", LLM_TIMEOUT)
+        msg = f"LLM call timed out after {LLM_TIMEOUT}s"
+        logger.warning("LLM: %s", msg)
         if emit_log:
-            emit_log("LLM_TIMEOUT", f"Timed out after {LLM_TIMEOUT}s")
-        return ""
+            emit_log("LLM_TIMEOUT", msg)
+        return "", msg
     except Exception as exc:
-        logger.warning("LLM call failed: %s", exc)
+        msg = f"LLM call failed: {exc}"
+        logger.warning("LLM: %s", msg)
         if emit_log:
-            emit_log("LLM_ERROR", str(exc)[:150])
-        return ""
+            emit_log("LLM_ERROR", str(exc)[:200])
+        return "", msg
     finally:
         _llm_semaphore.release()

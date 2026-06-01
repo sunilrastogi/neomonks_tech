@@ -75,7 +75,7 @@ Your ONLY job is to output a single valid JSON object.
 Never output explanations, markdown, or any text outside the JSON object.
 Always start your response with { and end with }."""
 
-ARCHITECT_PROMPT = """Analyse this software requirement and return a JSON architecture with tasks.
+ARCHITECT_PROMPT = """Analyse this software requirement and return a detailed JSON architecture with implementation tasks.
 
 PRODUCT: {product_name}
 REQUIREMENT: {title}
@@ -87,11 +87,11 @@ Return ONLY this JSON structure (no other text):
   "rationale": "one sentence explaining the architecture",
   "tasks": [
     {{
-      "title": "short task title",
-      "description": "what exactly to build",
+      "title": "short task title (max 80 chars)",
+      "description": "Detailed implementation instructions. Specify exact class names, function signatures, API endpoints, DB columns, UI components, validation rules, error handling, and edge cases. Be concrete — the developer should not need to make design decisions.",
       "owner_role": "BACKEND_DEVELOPER",
       "estimate": "M",
-      "files": ["backend/apps/core/models.py"],
+      "files": ["backend/apps/expense_tracker/models.py"],
       "depends_on": []
     }}
   ]
@@ -101,8 +101,10 @@ Rules:
 - owner_role must be one of: FRONTEND_DEVELOPER, BACKEND_DEVELOPER, QA_ENGINEER, DEVOPS_ENGINEER, DATA_ENGINEER, INFRA_ADMIN
 - estimate must be one of: XS, S, M, L, XL
 - depends_on lists task TITLES from this same list
-- Create 3-7 tasks that together fully implement the requirement
-- Include at least one BACKEND_DEVELOPER and one FRONTEND_DEVELOPER task
+- Create 4-8 tasks that together fully implement the requirement
+- description must be at least 3 sentences, specific to this product — no generic placeholders
+- Include exact model field names, API route paths, component prop names, test scenarios
+- Include at least one BACKEND_DEVELOPER task and one FRONTEND_DEVELOPER task
 - Start your response with {{ immediately"""
 
 
@@ -131,9 +133,30 @@ class AutonomousPlanner:
 
     def _pipeline(self, req: Requirement) -> ArchitectureArtifact:
         from apps.workflow.autonomous.llm import call as llm_call
+        from apps.workflow.autonomous.executor import product_workspace
 
         def log(step, detail=""):
             _log(req.id, step, detail)
+
+        # ── Step 0: Persist requirement to file ──────────────────────────
+        try:
+            ws = product_workspace(req.product.slug)
+            req_dir = ws / "requirements"
+            req_dir.mkdir(parents=True, exist_ok=True)
+            safe_title = re.sub(r"[^\w\-]", "_", req.title)[:60]
+            req_file = req_dir / f"REQ-{req.id:04d}-{safe_title}.md"
+            req_file.write_text(
+                f"# {req.title}\n\n"
+                f"**Product:** {req.product.name}  \n"
+                f"**Status:** {req.status}  \n"
+                f"**Priority:** {req.priority}  \n\n"
+                f"## Summary\n\n{req.summary or ''}\n\n"
+                f"## Details\n\n{req.source_document or ''}\n",
+                encoding="utf-8",
+            )
+            log("REQ_SAVED", f"Requirement saved to {req_file.relative_to(ws.parent.parent)}")
+        except Exception as exc:
+            logger.warning("Could not save requirement file: %s", exc)
 
         # ── Step 1: PO summarises requirement ────────────────────────────
         log("PO_READING", "Product Owner reading requirement document")
@@ -186,7 +209,7 @@ class AutonomousPlanner:
     @staticmethod
     def _run_po(req, doc, llm_call, log) -> str:
         prompt = f"""You are a Product Owner reviewing a requirement.
-Summarise these key points in 3 bullet points, then write one sentence brief for the architect.
+Summarise the key goals in 3 bullet points, then write one sentence architect brief.
 
 PRODUCT: {req.product.name}
 REQUIREMENT: {req.title}
@@ -197,8 +220,10 @@ Output format:
 - Key point 2
 - Key point 3
 ARCHITECT BRIEF: <one sentence>"""
-        result = llm_call(prompt, system="You are a Product Owner. Be concise.", emit_log=log)
-        return result or f"Build {req.title} for {req.product.name}"
+        text, error = llm_call(prompt, system="You are a Product Owner. Be concise.", emit_log=log)
+        if error:
+            raise RuntimeError(error)
+        return text or f"Build {req.title} for {req.product.name}"
 
     @staticmethod
     def _run_architect(req, doc, po_summary, llm_call, log) -> str:
@@ -207,7 +232,10 @@ ARCHITECT BRIEF: <one sentence>"""
             title=req.title,
             document=doc[:3000],
         )
-        return llm_call(prompt, system=ARCHITECT_SYSTEM, emit_log=log)
+        text, error = llm_call(prompt, system=ARCHITECT_SYSTEM, emit_log=log)
+        if error:
+            raise RuntimeError(error)
+        return text
 
     @staticmethod
     def _fallback_design(req) -> dict[str, Any]:

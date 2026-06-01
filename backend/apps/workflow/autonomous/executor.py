@@ -315,8 +315,22 @@ class AutonomousExecutor:
             try:
                 close_old_connections()
                 task = Task.objects.get(id=task_id)
-                task.status = TaskStatus.CHANGES_REQUESTED
-                task.save(update_fields=["status", "updated_at"])
+                err_msg = str(exc)
+                is_resource_error = any(
+                    kw in err_msg.lower()
+                    for kw in ("not running", "unavailable", "connection", "timed out", "empty response")
+                )
+                if is_resource_error:
+                    # Don't mark as CHANGES_REQUESTED — the code isn't wrong,
+                    # the model is just unavailable. Keep as READY so the loop
+                    # retries automatically when Ollama comes back up.
+                    task.status = TaskStatus.READY
+                    task.assigned_agent = None
+                    self._emit_agent_log(task_id, task.assigned_agent or "Agent",
+                                        "RESOURCE_UNAVAILABLE", err_msg[:200])
+                else:
+                    task.status = TaskStatus.CHANGES_REQUESTED
+                task.save(update_fields=["status", "assigned_agent", "updated_at"])
             except Exception:
                 pass
         finally:
@@ -527,25 +541,17 @@ No explanations. No markdown. Only file blocks."""
         )
 
         emit("LLM_CALL", f"Sending task to {agent_profile.model_name or 'qwen2.5-coder:7b'}")
-        raw = llm_call(user_prompt, system=system_prompt, emit_log=emit)
+        raw, llm_error = llm_call(user_prompt, system=system_prompt, emit_log=emit)
+
+        if llm_error:
+            # Propagate the error so _execute can set the task to FAILED
+            raise RuntimeError(llm_error)
 
         if raw:
             file_count = raw.count("=== FILE:")
             emit("LLM_DONE", f"Model responded ({len(raw)} chars, ~{file_count} file blocks)")
         else:
-            emit("LLM_EMPTY", "Model returned no output — writing stubs")
-
-        if not raw:
-            # Write meaningful stubs so the branch has content
-            stubs = ""
-            for fp in (planned_files or [f"output/task_{task.id}_stub.py"]):
-                stubs += (
-                    f"=== FILE: {fp} ===\n"
-                    f"# Task: {task.title}\n"
-                    f"# Agent: {agent_name}\n"
-                    f"# TODO: {clean_desc[:300]}\n"
-                    f"=== END FILE ===\n\n"
-                )
-            return stubs
+            emit("LLM_EMPTY", "Model returned empty response")
+            raise RuntimeError("Model returned an empty response — nothing to write.")
 
         return raw
