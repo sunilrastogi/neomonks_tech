@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """
 Django settings for core project.
 
@@ -10,6 +11,7 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -29,6 +31,16 @@ ALLOWED_HOSTS = []
 
 
 # Application definition
+=======
+from pathlib import Path
+from decouple import config
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+SECRET_KEY = config('SECRET_KEY', default='change-me-in-production')
+DEBUG = config('DEBUG', default=True, cast=bool)
+ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*').split(',')
+>>>>>>> 43df0bde1d4462afbebd112bf3f839a4daeee51d
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -37,9 +49,24 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+<<<<<<< HEAD
+    'django.contrib.postgres',
+    'rest_framework',
+    'django_filters',
+    'apps.realtime',
+    'apps.workflow',
 ]
 
 MIDDLEWARE = [
+=======
+    'rest_framework',
+    'django_filters',
+    'corsheaders',
+]
+
+MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
+>>>>>>> 43df0bde1d4462afbebd112bf3f839a4daeee51d
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -51,10 +78,11 @@ MIDDLEWARE = [
 
 ROOT_URLCONF = 'core.urls'
 
+<<<<<<< HEAD
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -74,8 +102,15 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME':     os.environ.get('DB_NAME',     'neomonks_core'),
+        'USER':     os.environ.get('DB_USER',     'neomonks'),
+        'PASSWORD': os.environ.get('DB_PASSWORD', 'neomonks_dev'),
+        'HOST':     os.environ.get('DB_HOST',     'localhost'),
+        'PORT':     os.environ.get('DB_PORT',     '5432'),
+        'OPTIONS': {
+            'connect_timeout': 10,
+        },
     }
 }
 
@@ -114,9 +149,94 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+STATICFILES_DIRS = [BASE_DIR / 'static']
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ── Autonomous workflow settings ──────────────────────────────────────────────
+
+# Directory where agent-written code is stored (one sub-dir per product/branch)
+WORKFLOW_WORKSPACE = BASE_DIR / 'workspace'
+
+# GitHub integration (set these as env vars in production)
+GITHUB_TOKEN      = os.environ.get('GITHUB_TOKEN', '')
+GITHUB_REPO       = os.environ.get('GITHUB_REPO', '')       # e.g. "org/repo"
+GITHUB_BASE_BRANCH = os.environ.get('GITHUB_BASE_BRANCH', 'main')
+
+# Default LLM model for CrewAI agents
+DEFAULT_AGENT_MODEL = os.environ.get('DEFAULT_AGENT_MODEL', 'ollama/qwen2.5-coder:7b')
+
+# Path where Ollama models are stored (passed as OLLAMA_MODELS env var when starting Ollama)
+OLLAMA_MODELS_PATH = os.environ.get('OLLAMA_MODELS_PATH', r'E:\neomonks_tech\models')
+OLLAMA_HOST       = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
+# Force CPU-only: GPU has insufficient VRAM to hold model layers (causes CUDA_Host OOM)
+OLLAMA_NUM_GPU    = int(os.environ.get('OLLAMA_NUM_GPU', '0'))
+
+# Hard cap on concurrent background workers — prevents thread exhaustion
+AUTONOMOUS_MAX_WORKERS = int(os.environ.get('AUTONOMOUS_MAX_WORKERS', 4))
+
+# Hard timeout for any single LLM call (seconds) — prevents hung threads
+LLM_TIMEOUT_SECONDS = int(os.environ.get('LLM_TIMEOUT_SECONDS', 300))
+
+# Loop timing
+LOOP_POLL_INTERVAL   = int(os.environ.get('LOOP_POLL_INTERVAL', 10))    # seconds between loop ticks
+LOOP_PR_SYNC_INTERVAL = int(os.environ.get('LOOP_PR_SYNC_INTERVAL', 3600))  # PR sync every hour
+
+
+# REST Framework
+=======
+TEMPLATES = [{
+    'BACKEND': 'django.template.backends.django.DjangoTemplates',
+    'DIRS': [],
+    'APP_DIRS': True,
+    'OPTIONS': {'context_processors': [
+        'django.template.context_processors.request',
+        'django.contrib.auth.context_processors.auth',
+        'django.contrib.messages.context_processors.messages',
+    ]},
+}]
+
+WSGI_APPLICATION = 'core.wsgi.application'
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
+LANGUAGE_CODE = 'en-us'
+TIME_ZONE = 'UTC'
+USE_I18N = True
+USE_TZ = True
+
+STATIC_URL = 'static/'
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+>>>>>>> 43df0bde1d4462afbebd112bf3f839a4daeee51d
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 50,
+    'DEFAULT_FILTER_BACKENDS': [
+        'django_filters.rest_framework.DjangoFilterBackend',
+        'rest_framework.filters.SearchFilter',
+        'rest_framework.filters.OrderingFilter',
+    ],
+<<<<<<< HEAD
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.SessionAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
+    ],
+}
+=======
+    'DEFAULT_PERMISSION_CLASSES': ['rest_framework.permissions.AllowAny'],
+}
+
+CORS_ALLOW_ALL_ORIGINS = DEBUG
+>>>>>>> 43df0bde1d4462afbebd112bf3f839a4daeee51d

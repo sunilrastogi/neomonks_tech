@@ -55,6 +55,7 @@ All APIs must use Django REST Framework.
 
 Primary:
 - PostgreSQL
+- MySQL
 
 Caching:
 - Redis

@@ -2,7 +2,7 @@ from importlib.metadata import files
 
 from crewai import Crew
 
-from agents.infra_admin import infra_admin
+from agents.vikram_singh_infra_admin import vikram_singh
 from tasks.product_bootstrap_tasks import bootstrap_product_task
 
 from utils.output_parser import OutputParser
@@ -16,7 +16,7 @@ def bootstrap_product():
     print("\\n=== PRODUCT BOOTSTRAP STARTED ===\\n")
 
     crew = Crew(
-        agents=[infra_admin],
+        agents=[vikram_singh],
         tasks=[bootstrap_product_task],
         verbose=True
     )

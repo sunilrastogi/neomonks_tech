@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """
 URL configuration for core project.
 
@@ -15,8 +16,20 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path
+from django.contrib.staticfiles.urls import staticfiles_urlpatterns
+from django.urls import include, path
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('api/v1/workflow/', include('apps.workflow.api.urls')),
+    path('api/v1/realtime/', include('apps.realtime.urls')),
+] + staticfiles_urlpatterns()
+=======
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('api/v1/', include('apps.urls')),
 ]
+>>>>>>> 43df0bde1d4462afbebd112bf3f839a4daeee51d

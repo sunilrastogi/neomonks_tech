@@ -1,7 +1,7 @@
 from crewai import Agent
 
-infra_admin = Agent(
-    role="Infrastructure Administrator",
+vikram_singh = Agent(
+    role="Vikram Singh - Infrastructure Administrator",
     goal="""
     Setup and initialize product repositories
     following Neomonks platform standards.

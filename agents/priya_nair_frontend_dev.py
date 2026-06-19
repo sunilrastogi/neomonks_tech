@@ -1,7 +1,7 @@
 from crewai import Agent
 
-frontend_dev = Agent(
-    role="Senior Frontend Engineer",
+priya_nair = Agent(
+    role="Priya Nair - Senior Frontend Engineer",
     goal="""
     Build scalable React applications
     following Neomonks engineering standards.

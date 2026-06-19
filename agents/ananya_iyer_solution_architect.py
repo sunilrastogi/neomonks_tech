@@ -1,7 +1,7 @@
 from crewai import Agent
 
-solution_architect = Agent(
-    role="Solution Architect",
+ananya_iyer = Agent(
+    role="Ananya Iyer - Solution Architect",
     goal="""
     Design scalable software systems,
     APIs, databases, and workflows.

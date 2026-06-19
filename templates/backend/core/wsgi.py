@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 """
 WSGI config for core project.
 
@@ -13,4 +14,9 @@ from django.core.wsgi import get_wsgi_application
 
 os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
 
+=======
+import os
+from django.core.wsgi import get_wsgi_application
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'core.settings')
+>>>>>>> 43df0bde1d4462afbebd112bf3f839a4daeee51d
 application = get_wsgi_application()
