@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PR Review — {{ task.title }}</title>
+  <style>
+    :root{--bg:#0f1117;--surface:#1a1d27;--border:#2a2d3e;--accent:#6366f1;--accent2:#22d3ee;--text:#e2e8f0;--muted:#64748b;--ok:#22c55e;--warn:#f59e0b;--err:#ef4444;}
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;font-size:14px;padding:24px;}
+    .header{display:flex;align-items:center;gap:12px;margin-bottom:24px;flex-wrap:wrap;}
+    .logo{font-weight:800;font-size:16px;color:var(--accent);}
+    h1{font-size:18px;font-weight:700;}
+    .badge{display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;border-radius:6px;text-transform:uppercase;}
+    .badge-review{background:rgba(245,158,11,.15);color:var(--warn);}
+    .badge-merged{background:rgba(34,197,94,.15);color:var(--ok);}
+    .badge-approved{background:rgba(34,197,94,.15);color:var(--ok);}
+    .badge-changes{background:rgba(239,68,68,.12);color:var(--err);}
+    .grid{display:grid;grid-template-columns:300px 1fr;gap:16px;align-items:start;}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px;}
+    .label{font-size:11px;font-weight:600;text-transform:uppercase;color:var(--muted);letter-spacing:.06em;margin-bottom:6px;}
+    .meta-row{margin-bottom:10px;}
+    .meta-val{font-size:13px;}
+    .file-item{padding:6px 8px;border-radius:5px;cursor:pointer;font-size:12px;font-family:monospace;display:flex;justify-content:space-between;gap:8px;transition:.1s;}
+    .file-item:hover,.file-item.active{background:rgba(99,102,241,.1);color:var(--accent2);}
+    #code-view{background:var(--bg);border:1px solid var(--border);border-radius:9px;overflow:hidden;}
+    #code-header{padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;color:var(--accent2);font-weight:600;}
+    #code-pre{padding:14px;font-family:monospace;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;overflow-y:auto;max-height:calc(100vh - 320px);color:var(--text);}
+    .btn{display:inline-flex;align-items:center;gap:6px;padding:9px 18px;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;border:none;transition:opacity .15s;}
+    .btn:hover{opacity:.85;} .btn:disabled{opacity:.35;cursor:not-allowed;}
+    .btn-g{background:var(--ok);color:#fff;} .btn-e{background:var(--err);color:#fff;} .btn-i{background:var(--accent);color:#fff;}
+    .action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px;}
+    .toast{position:fixed;bottom:20px;right:20px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.4);transition:opacity .3s;opacity:0;}
+    .toast.show{opacity:1;}
+    textarea{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:8px 10px;font-size:13px;resize:vertical;min-height:60px;outline:none;font-family:inherit;margin-top:6px;}
+    textarea:focus{border-color:var(--accent);}
+    ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px;}
+    .workspace-path{font-size:11px;color:var(--muted);margin-top:6px;word-break:break-all;}
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <span class="logo">NeoMonks</span>
+  <h1>{{ task.title }}</h1>
+  {% if pr %}
+    <span class="badge badge-{{ pr.status|lower }}">{{ pr.status }}</span>
+  {% endif %}
+  <a href="/api/v1/realtime/dashboard/" style="margin-left:auto;color:var(--muted);font-size:12px;text-decoration:none;">← Dashboard</a>
+</div>
+
+<div class="grid">
+
+  <!-- LEFT: meta + actions -->
+  <div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="meta-row">
+        <div class="label">Role</div>
+        <div class="meta-val">{{ task.owner_role|title }}</div>
+      </div>
+      <div class="meta-row">
+        <div class="label">Agent</div>
+        <div class="meta-val">{{ task.assigned_agent|default:"—" }}</div>
+      </div>
+      <div class="meta-row">
+        <div class="label">Branch</div>
+        <div class="meta-val" style="font-family:monospace;font-size:12px">{{ task.branch_name|default:"—" }}</div>
+      </div>
+      <div class="meta-row">
+        <div class="label">Status</div>
+        <div class="meta-val">{{ task.status }}</div>
+      </div>
+      <div class="meta-row" style="margin-bottom:0">
+        <div class="label">Description</div>
+        <div class="meta-val" style="color:var(--muted);font-size:12px;line-height:1.6">{{ task.description|truncatechars:300 }}</div>
+      </div>
+    </div>
+
+    <!-- Review actions -->
+    {% if task.status == "IN_REVIEW" %}
+    <div class="card">
+      <div class="label" style="margin-bottom:10px">Review Decision</div>
+      <div class="action-row">
+        <button class="btn btn-g" onclick="approve()">✔ Approve</button>
+        <button class="btn btn-e" onclick="showReject()">↩ Request Changes</button>
+      </div>
+      <div id="reject-form" style="display:none;margin-top:12px">
+        <textarea id="reject-comment" placeholder="Describe the changes needed…"></textarea>
+        <div class="action-row" style="margin-top:8px">
+          <button class="btn btn-e" onclick="requestChanges()">Send Changes</button>
+          <button class="btn" style="background:var(--border);color:var(--text)" onclick="hideReject()">Cancel</button>
+        </div>
+      </div>
+      <div id="review-resp" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+    </div>
+    {% elif task.status == "APPROVED" %}
+    <div class="card">
+      <div class="label" style="margin-bottom:10px">Merge</div>
+      <button class="btn btn-i" onclick="merge()">⤴ Merge Task</button>
+      <div id="review-resp" style="margin-top:8px;font-size:12px;color:var(--muted)"></div>
+    </div>
+    {% endif %}
+
+    <!-- File list -->
+    <div class="card" style="margin-top:12px">
+      <div class="label">Files ({{ files|length }})</div>
+      <div class="workspace-path">{{ workspace }}</div>
+      <div style="margin-top:8px;max-height:300px;overflow-y:auto" id="file-list">
+        {% for f in files %}
+          <div class="file-item" onclick="loadFile('{{ f|escapejs }}')" data-path="{{ f }}">
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 {{ f }}</span>
+          </div>
+        {% empty %}
+          <div style="color:var(--muted);font-size:12px;padding:8px 0">No files yet — task not executed.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: code viewer -->
+  <div id="code-view">
+    <div id="code-header">Select a file →</div>
+    <pre id="code-pre" style="color:var(--muted)">Click a file on the left to view its content.</pre>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const taskId = {{ task.id }};
+{% if pr %}const prId = {{ pr.id }};{% else %}const prId = null;{% endif %}
+
+function toast(msg, ok=true){
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.className='toast show';
+  el.style.borderColor=ok?'var(--ok)':'var(--err)';
+  clearTimeout(el._t); el._t=setTimeout(()=>el.className='toast',3500);
+}
+
+async function loadFile(path){
+  document.querySelectorAll('.file-item').forEach(el=>{
+    el.classList.toggle('active', el.dataset.path===path);
+  });
+  document.getElementById('code-header').textContent=path;
+  document.getElementById('code-pre').textContent='Loading…';
+  const r=await fetch(`/api/v1/workflow/tasks/${taskId}/workspace/?file=${encodeURIComponent(path)}`);
+  if(!r.ok){document.getElementById('code-pre').textContent='Error loading file.';return;}
+  const d=await r.json();
+  document.getElementById('code-pre').textContent=d.content;
+}
+
+function getCookie(name){return document.cookie.split(';').map(c=>c.trim()).find(c=>c.startsWith(name+'='))?.split('=')[1]||'';}
+async function apiPost(path, body={}){
+  const r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':getCookie('csrftoken')},body:JSON.stringify(body)});
+  return {ok:r.ok, data:await r.json().catch(()=>({}))};
+}
+
+async function approve(){
+  if(!prId){toast('No PR record',false);return;}
+  const {ok,data}=await apiPost(`/api/v1/workflow/prs/${prId}/approve/`,{approved_by:'human'});
+  const resp=document.getElementById('review-resp');
+  if(ok){toast('✔ Approved');resp.textContent='Approved. Downstream tasks will be dispatched.';resp.style.color='var(--ok)';location.reload();}
+  else{toast('Error',false);resp.textContent=JSON.stringify(data);resp.style.color='var(--err)';}
+}
+
+function showReject(){document.getElementById('reject-form').style.display='block';}
+function hideReject(){document.getElementById('reject-form').style.display='none';}
+
+async function requestChanges(){
+  if(!prId){toast('No PR record',false);return;}
+  const comment=document.getElementById('reject-comment').value.trim()||'Changes requested.';
+  const {ok,data}=await apiPost(`/api/v1/workflow/prs/${prId}/request_changes/`,{comment});
+  const resp=document.getElementById('review-resp');
+  if(ok){toast('↩ Changes requested');resp.textContent='Agent will rework and resubmit.';resp.style.color='var(--warn)';location.reload();}
+  else{toast('Error',false);resp.textContent=JSON.stringify(data);resp.style.color='var(--err)';}
+}
+
+async function merge(){
+  if(!prId){toast('No PR record',false);return;}
+  const {ok,data}=await apiPost(`/api/v1/workflow/prs/${prId}/merge/`);
+  const resp=document.getElementById('review-resp');
+  if(ok){toast('⤴ Merged');resp.textContent='Task merged. Downstream tasks dispatched.';resp.style.color='var(--ok)';location.reload();}
+  else{toast('Error',false);resp.textContent=JSON.stringify(data);resp.style.color='var(--err)';}
+}
+</script>
+</body>
+</html>
