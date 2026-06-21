@@ -10,7 +10,7 @@ from apps.workflow.models import (
 class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
-        fields = ['id', 'name', 'slug', 'description', 'status', 'created_at', 'updated_at']
+        fields = ['id', 'name', 'slug', 'description', 'github_repo', 'status', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
 
 
@@ -49,14 +49,34 @@ class TaskSerializer(serializers.ModelSerializer):
     dependents = TaskDependencySerializer(many=True, read_only=True)
     product_name = serializers.CharField(source='product.name', read_only=True)
     requirement_title = serializers.CharField(source='requirement.title', read_only=True, allow_null=True)
+    planned_files = serializers.SerializerMethodField()
+    clean_description = serializers.SerializerMethodField()
 
     class Meta:
         model = Task
         fields = ['id', 'product', 'product_name', 'requirement', 'requirement_title',
-                  'title', 'description', 'owner_role', 'assigned_agent', 'status',
+                  'title', 'description', 'clean_description', 'acceptance_criteria',
+                  'tech_stack', 'planned_files',
+                  'owner_role', 'assigned_agent', 'status',
                   'branch_name', 'pr_url', 'estimate', 'order_index',
                   'dependencies', 'dependents', 'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
+
+    def get_planned_files(self, obj):
+        """Files the task should produce — parsed from the legacy description marker."""
+        import json, re
+        m = re.search(r"__PLANNED_FILES__: (\[.*?\])", obj.description or "")
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except (json.JSONDecodeError, ValueError):
+                pass
+        return []
+
+    def get_clean_description(self, obj):
+        """Description without the embedded __PLANNED_FILES__ marker."""
+        import re
+        return re.sub(r"\n*__PLANNED_FILES__: \[.*?\]", "", obj.description or "").strip()
 
 
 class FileLockSerializer(serializers.ModelSerializer):
@@ -72,11 +92,18 @@ class FileLockSerializer(serializers.ModelSerializer):
 
 
 class AgentProfileSerializer(serializers.ModelSerializer):
+    role_label = serializers.CharField(source='get_role_display', read_only=True)
+    system_prompt = serializers.SerializerMethodField()
+
     class Meta:
         model = AgentProfile
-        fields = ['id', 'display_name', 'role', 'model_name', 'enabled', 'allowed_paths',
+        fields = ['id', 'display_name', 'role', 'role_label', 'model_name', 'enabled',
+                  'bio', 'experience_years', 'skills', 'allowed_paths', 'system_prompt',
                   'created_at', 'updated_at']
         read_only_fields = ['created_at', 'updated_at']
+
+    def get_system_prompt(self, obj):
+        return obj.build_system_prompt()
 
 
 class PullRequestRecordSerializer(serializers.ModelSerializer):

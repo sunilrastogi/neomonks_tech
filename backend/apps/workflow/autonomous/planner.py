@@ -89,6 +89,7 @@ Return ONLY this JSON structure (no other text):
     {{
       "title": "short task title (max 80 chars)",
       "description": "Detailed implementation instructions. Specify exact class names, function signatures, API endpoints, DB columns, UI components, validation rules, error handling, and edge cases. Be concrete — the developer should not need to make design decisions.",
+      "acceptance_criteria": ["Specific, testable condition the deliverable must satisfy", "Another concrete criterion"],
       "owner_role": "BACKEND_DEVELOPER",
       "estimate": "M",
       "files": ["backend/apps/expense_tracker/models.py"],
@@ -98,9 +99,10 @@ Return ONLY this JSON structure (no other text):
 }}
 
 Rules:
-- owner_role must be one of: FRONTEND_DEVELOPER, BACKEND_DEVELOPER, QA_ENGINEER, DEVOPS_ENGINEER, DATA_ENGINEER, INFRA_ADMIN
+- owner_role must be one of: FRONTEND_DEVELOPER, BACKEND_DEVELOPER, QA_ENGINEER, DEVOPS_ENGINEER, DATA_ENGINEER, INFRA_ADMIN, FLUTTER_DEVELOPER, ANDROID_DEVELOPER, IOS_DEVELOPER
 - estimate must be one of: XS, S, M, L, XL
 - depends_on lists task TITLES from this same list
+- acceptance_criteria must list 2-5 specific, testable conditions for the task
 - Create 4-8 tasks that together fully implement the requirement
 - description must be at least 3 sentences, specific to this product — no generic placeholders
 - Include exact model field names, API route paths, component prop names, test scenarios
@@ -307,13 +309,21 @@ ARCHITECT BRIEF: <one sentence>"""
                 est = "M"
             title = (raw.get("title") or f"Task {i+1}").strip()
             desc = raw.get("description", "")
-            files = raw.get("files", [])
+            files = raw.get("files", []) or []
+            criteria = raw.get("acceptance_criteria", []) or []
+            if isinstance(criteria, str):
+                criteria = [criteria]
+            criteria_text = "\n".join(str(c).strip() for c in criteria if str(c).strip())
+            tech_stack = raw.get("tech_stack", []) or []
+            if isinstance(tech_stack, str):
+                tech_stack = [tech_stack]
             if files:
                 desc += f"\n\n__PLANNED_FILES__: {json.dumps(files)}"
 
             task = Task.objects.create(
                 product=req.product, requirement=req, architecture=artifact,
                 title=title, description=desc, owner_role=role,
+                acceptance_criteria=criteria_text, tech_stack=tech_stack,
                 estimate=est, order_index=i, status=TaskStatus.BLOCKED,
             )
             created[title] = task

@@ -52,13 +52,11 @@ def _task_semaphore(task_id: int) -> threading.Lock:
 # ── Agent prompt template ─────────────────────────────────────────────────────
 
 DEVELOPER_PROMPT = """
-You are {agent_name}, a {role_label} at NeoMonks.
-
 YOUR TASK: {title}
 
 DESCRIPTION:
 {description}
-
+{acceptance_block}
 FILES YOU MUST PRODUCE:
 {files_list}
 
@@ -72,6 +70,12 @@ Output each file using EXACTLY this format:
 Do not include any explanation outside the file blocks.
 """
 
+OUTPUT_FORMAT_INSTRUCTIONS = """Output ONLY file blocks in this exact format:
+=== FILE: path/to/file.ext ===
+<complete file content>
+=== END FILE ===
+No explanations. No markdown. Only file blocks."""
+
 ROLE_LABELS = {
     "FRONTEND_DEVELOPER": "Senior Frontend Developer",
     "BACKEND_DEVELOPER": "Senior Backend Developer",
@@ -82,6 +86,9 @@ ROLE_LABELS = {
     "DATA_SCIENTIST": "Data Scientist",
     "BI_DEVELOPER": "BI Developer",
     "INFRA_ADMIN": "Infrastructure Admin",
+    "FLUTTER_DEVELOPER": "Senior Flutter Developer",
+    "ANDROID_DEVELOPER": "Senior Android Developer",
+    "IOS_DEVELOPER": "Senior iOS Developer",
 }
 
 
@@ -139,6 +146,9 @@ ROLE_SUBDIR = {
     "MLOPS_ENGINEER":     "backend/apps/ml",
     "DATA_SCIENTIST":     "backend/apps/ml",
     "BI_DEVELOPER":       "frontend/src/pages",
+    "FLUTTER_DEVELOPER":  "mobile/lib",
+    "ANDROID_DEVELOPER":  "android/app/src/main",
+    "IOS_DEVELOPER":      "ios",
 }
 
 
@@ -260,6 +270,104 @@ def _git_commit_and_push(workspace: Path, branch: str, task_title: str) -> bool:
     return committed
 
 
+# Git's well-known SHA for the empty tree — committing it removes every file
+# while preserving history.
+_EMPTY_TREE_SHA = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+
+
+def empty_github_repo(product_slug: str, github_repo: str = "") -> dict:
+    """Make the product's repository empty.
+
+    ``github_repo`` (e.g. "org/repo") overrides the global GITHUB_REPO setting,
+    letting each product target its own repository.
+
+    1. Clears all files from the local product workspace (keeps .git history).
+    2. If GITHUB_TOKEN + GITHUB_REPO are configured, pushes an empty-tree commit
+       to the default branch so the GitHub repo is emptied too.
+
+    Returns a dict describing what happened.
+    """
+    result: dict = {"emptied": False, "local_cleared": False, "github": None}
+
+    # ── 1. Clear local workspace files ───────────────────────────────────────
+    try:
+        ws = product_workspace(product_slug)
+        if ws.exists():
+            import shutil
+            keep = {".git"}
+            for child in ws.iterdir():
+                if child.name in keep:
+                    continue
+                if child.is_dir():
+                    shutil.rmtree(child, ignore_errors=True)
+                else:
+                    try:
+                        child.unlink()
+                    except OSError:
+                        pass
+            result["local_cleared"] = True
+            result["emptied"] = True
+    except Exception as exc:
+        logger.warning("empty_github_repo: local clear failed: %s", exc)
+        result["local_error"] = str(exc)
+
+    # ── 2. Empty the GitHub repo via the API (empty-tree commit) ─────────────
+    github_token = getattr(settings, "GITHUB_TOKEN", "")
+    github_repo = github_repo or getattr(settings, "GITHUB_REPO", "")
+    github_base_branch = getattr(settings, "GITHUB_BASE_BRANCH", "main")
+    if not github_token or not github_repo:
+        result["github"] = "not configured"
+        return result
+
+    try:
+        import requests as req_lib
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept": "application/vnd.github+json",
+        }
+        base_url = f"https://api.github.com/repos/{github_repo}"
+
+        # Current head of the default branch
+        ref_resp = req_lib.get(
+            f"{base_url}/git/ref/heads/{github_base_branch}", headers=headers, timeout=15
+        )
+        if ref_resp.status_code != 200:
+            result["github"] = f"ref lookup failed: {ref_resp.status_code}"
+            return result
+        parent_sha = ref_resp.json()["object"]["sha"]
+
+        # Commit pointing at the empty tree
+        commit_resp = req_lib.post(
+            f"{base_url}/git/commits", headers=headers, timeout=15,
+            json={
+                "message": "chore: empty repository [neomonks]",
+                "tree": _EMPTY_TREE_SHA,
+                "parents": [parent_sha],
+            },
+        )
+        if commit_resp.status_code not in (200, 201):
+            result["github"] = f"commit failed: {commit_resp.status_code} {commit_resp.text[:200]}"
+            return result
+        new_sha = commit_resp.json()["sha"]
+
+        # Move the branch to the new (empty) commit
+        update_resp = req_lib.patch(
+            f"{base_url}/git/refs/heads/{github_base_branch}", headers=headers, timeout=15,
+            json={"sha": new_sha, "force": True},
+        )
+        if update_resp.status_code in (200, 201):
+            result["github"] = "emptied"
+            result["emptied"] = True
+            logger.info("GitHub repo %s emptied (commit %s)", github_repo, new_sha[:7])
+        else:
+            result["github"] = f"ref update failed: {update_resp.status_code} {update_resp.text[:200]}"
+    except Exception as exc:
+        logger.warning("empty_github_repo: GitHub API error: %s", exc)
+        result["github"] = f"error: {exc}"
+
+    return result
+
+
 def _create_github_pr(branch: str, task_title: str, task_description: str) -> str | None:
     """Create a GitHub PR and return its URL, or None if not configured."""
     github_token = getattr(settings, "GITHUB_TOKEN", "")
@@ -348,7 +456,7 @@ class AutonomousExecutor:
             logger.warning("Executor: no available agent for role %s (task %d)", task.owner_role, task_id)
             return
 
-        # 2. Determine files to lock
+        # 2. Determine files to lock (from the __PLANNED_FILES__ marker in the description)
         planned_files = _planned_files_from_description(task.description)
 
         # 3. Acquire file locks
@@ -517,26 +625,31 @@ class AutonomousExecutor:
 
         clean_desc = re.sub(r"\n*__PLANNED_FILES__: \[.*?\]", "", task.description).strip()
         files_list = "\n".join(f"  - {f}" for f in planned_files) if planned_files else "  (choose appropriate files)"
-        role_label = ROLE_LABELS.get(task.owner_role, task.owner_role.replace("_", " ").title())
         agent_name = agent_profile.display_name
+
+        # Acceptance criteria drive the implementation — the deliverable must satisfy them.
+        criteria_text = (task.acceptance_criteria or "").strip()
+        if criteria_text:
+            acceptance_block = (
+                "\nACCEPTANCE CRITERIA (the implementation MUST satisfy all):\n"
+                + criteria_text + "\n"
+            )
+        else:
+            acceptance_block = ""
 
         def emit(step, detail=""):
             AutonomousExecutor._emit_agent_log(task.id, agent_name, step, detail)
 
         emit("STARTING", f"Beginning task: {task.title}")
 
-        system_prompt = f"""You are {agent_name}, a {role_label}.
-Write complete, working code. Output ONLY file blocks in this exact format:
-=== FILE: path/to/file.ext ===
-<complete file content>
-=== END FILE ===
-No explanations. No markdown. Only file blocks."""
+        # Use the agent's composed identity/skills prompt, then append the strict
+        # output-format instructions the parser depends on.
+        system_prompt = agent_profile.build_system_prompt() + "\n\n" + OUTPUT_FORMAT_INSTRUCTIONS
 
         user_prompt = DEVELOPER_PROMPT.format(
-            agent_name=agent_name,
-            role_label=role_label,
             title=task.title,
             description=clean_desc[:3000],
+            acceptance_block=acceptance_block,
             files_list=files_list,
         )
 

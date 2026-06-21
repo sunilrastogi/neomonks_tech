@@ -73,6 +73,9 @@ class AgentRole(TextChoices):
     MLOPS_ENGINEER = "MLOPS_ENGINEER", "MLOps Engineer"
     DATA_SCIENTIST = "DATA_SCIENTIST", "Data Scientist"
     BI_DEVELOPER = "BI_DEVELOPER", "BI Developer"
+    FLUTTER_DEVELOPER = "FLUTTER_DEVELOPER", "Flutter Developer"
+    ANDROID_DEVELOPER = "ANDROID_DEVELOPER", "Android Developer"
+    IOS_DEVELOPER = "IOS_DEVELOPER", "iOS Developer"
 
 
 class EventType(TextChoices):
@@ -113,6 +116,10 @@ class Product(models.Model):
     name = models.CharField(max_length=255, unique=True)
     slug = models.SlugField(unique=True)
     description = models.TextField(blank=True)
+    github_repo = models.CharField(
+        max_length=255, blank=True, default="",
+        help_text="GitHub repository for this product, e.g. 'org/repo'"
+    )
     status = models.CharField(
         max_length=50,
         default="ACTIVE",
@@ -197,6 +204,14 @@ class Task(models.Model):
     )
     title = models.CharField(max_length=255)
     description = models.TextField()
+    acceptance_criteria = models.TextField(
+        blank=True, default="",
+        help_text="Acceptance criteria the deliverable must satisfy (one per line)"
+    )
+    tech_stack = models.JSONField(
+        default=list, blank=True,
+        help_text="Technologies/libraries this task should use"
+    )
     owner_role = models.CharField(
         max_length=50,
         choices=AgentRole.choices,
@@ -280,6 +295,17 @@ class AgentProfile(models.Model):
         help_text="LLM model this agent uses"
     )
     enabled = models.BooleanField(default=True)
+    bio = models.TextField(
+        blank=True, default="",
+        help_text="Short biography / persona for the agent"
+    )
+    experience_years = models.IntegerField(
+        default=0, help_text="Years of experience (persona detail)"
+    )
+    skills = models.JSONField(
+        default=list, blank=True,
+        help_text="List of skill strings that shape this agent's system prompt"
+    )
     allowed_paths = models.JSONField(
         default=list,
         help_text="Glob patterns of files/dirs this agent can edit"
@@ -292,6 +318,64 @@ class AgentProfile(models.Model):
 
     def __str__(self):
         return f"{self.display_name} ({self.role})"
+
+    def build_system_prompt(self) -> str:
+        """Compose the agent's base system prompt from its role, skills and scope.
+
+        This is the canonical 'final agent prompt' shown on the profile page and
+        used (with task-specific output instructions appended) during execution.
+        """
+        role_label = self.get_role_display()
+        intro = f"You are {self.display_name}, a {role_label} at NeoMonks"
+        if self.experience_years:
+            intro += f" with {self.experience_years}+ years of experience"
+        lines = [intro + "."]
+
+        if (self.bio or "").strip():
+            lines.append(self.bio.strip())
+
+        responsibility = ROLE_RESPONSIBILITIES.get(self.role)
+        if responsibility:
+            lines.append(f"As a {role_label}, you {responsibility}")
+
+        skills = [s for s in (self.skills or []) if str(s).strip()]
+        if skills:
+            lines.append("")
+            lines.append("Your skills:")
+            lines.extend(f"  - {s}" for s in skills)
+
+        paths = [p for p in (self.allowed_paths or []) if str(p).strip()]
+        if paths:
+            lines.append("")
+            lines.append("You own these areas of the codebase:")
+            lines.extend(f"  - {p}" for p in paths)
+
+        lines.append("")
+        lines.append(
+            "Always write complete, production-quality, working code that follows "
+            "the team's engineering standards. Be concrete and avoid placeholders."
+        )
+        return "\n".join(lines)
+
+
+# Plain-language description of what each role is responsible for. Used to build
+# the agent system prompt (see AgentProfile.build_system_prompt).
+ROLE_RESPONSIBILITIES = {
+    AgentRole.PRODUCT_OWNER: "own requirement analysis, sprint planning, and task breakdown.",
+    AgentRole.SOLUTION_ARCHITECT: "design system architecture, API contracts, and data models.",
+    AgentRole.FRONTEND_DEVELOPER: "build React + TypeScript user interfaces with Tailwind CSS.",
+    AgentRole.BACKEND_DEVELOPER: "build Django REST Framework APIs, models, and business logic.",
+    AgentRole.INFRA_ADMIN: "scaffold projects and manage infrastructure and repositories.",
+    AgentRole.QA_ENGINEER: "write automated tests and verify acceptance criteria.",
+    AgentRole.DEVOPS_ENGINEER: "build CI/CD pipelines, Docker images, and deployment automation.",
+    AgentRole.DATA_ENGINEER: "build data pipelines, ETL jobs, and data models.",
+    AgentRole.MLOPS_ENGINEER: "operationalize ML models, training pipelines, and serving infra.",
+    AgentRole.DATA_SCIENTIST: "build models, run experiments, and analyze data.",
+    AgentRole.BI_DEVELOPER: "build dashboards, reports, and business-intelligence views.",
+    AgentRole.FLUTTER_DEVELOPER: "build cross-platform mobile apps with Flutter and Dart.",
+    AgentRole.ANDROID_DEVELOPER: "build native Android apps with Kotlin and Jetpack Compose.",
+    AgentRole.IOS_DEVELOPER: "build native iOS apps with Swift and SwiftUI.",
+}
 
 
 class PullRequestRecord(models.Model):

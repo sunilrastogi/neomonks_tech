@@ -78,6 +78,7 @@
     .card { background:var(--bg); border:1px solid var(--border); border-radius:6px; padding:8px 9px; margin-bottom:5px; cursor:pointer; transition:border-color .15s; }
     .card:hover  { border-color:var(--accent); }
     .card.sel    { border-color:var(--accent); background:rgba(99,102,241,.07); }
+    .card-del:hover { color:var(--err) !important; background:var(--border) !important; }
     .ct  { font-size:12px; font-weight:600; line-height:1.4; }
     .ca  { font-size:10px; color:var(--muted); margin-top:3px; }
     .cr  { display:inline-block; font-size:9px; border-radius:3px; padding:1px 5px; margin-top:4px; background:var(--border); color:var(--accent2); }
@@ -160,6 +161,20 @@
     ::-webkit-scrollbar-track { background:transparent; }
     ::-webkit-scrollbar-thumb { background:var(--border); border-radius:2px; }
 
+    /* modal */
+    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000; display:flex; align-items:flex-start; justify-content:center; padding:40px 16px; overflow-y:auto; }
+    .modal { background:var(--surface); border:1px solid var(--border); border-radius:12px; width:100%; max-width:600px; box-shadow:0 16px 48px rgba(0,0,0,.5); }
+    .modal-hd { display:flex; align-items:center; gap:10px; padding:16px 18px; border-bottom:1px solid var(--border); }
+    .modal-hd h3 { font-size:15px; font-weight:700; flex:1; }
+    .modal-close { background:var(--border); border:none; color:var(--muted); width:26px; height:26px; border-radius:6px; cursor:pointer; font-size:15px; line-height:1; }
+    .modal-close:hover { color:var(--text); }
+    .modal-bd { padding:18px; max-height:calc(100vh - 200px); overflow-y:auto; }
+    .modal-ft { padding:14px 18px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+    .kv { margin-bottom:12px; }
+    .kv-l { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin-bottom:4px; }
+    .kv-v { font-size:13px; line-height:1.6; white-space:pre-wrap; }
+    .pill { display:inline-block; font-size:11px; background:var(--surface2); border:1px solid var(--border); border-radius:12px; padding:2px 10px; margin:0 4px 4px 0; }
+    .prompt-box { background:var(--bg); border:1px solid var(--border); border-radius:8px; padding:12px; font-family:monospace; font-size:11px; line-height:1.55; white-space:pre-wrap; max-height:260px; overflow-y:auto; color:var(--text); }
     .empty-msg { color:var(--muted); font-size:12px; padding:8px 0; }
     .loop-badge { font-size:10px; padding:3px 8px; border-radius:10px; margin-left:auto; font-weight:700; }
     .loop-badge.running { background:rgba(34,197,94,.15); color:var(--ok); }
@@ -188,7 +203,10 @@
 
 <!-- SIDEBAR -->
 <aside>
-  <div class="sec">Agents <span class="chip" id="ab"></span></div>
+  <div class="sec">Agents <span class="chip" id="ab"></span>
+    <button onclick="openNewAgentModal()" title="Create a new agent"
+      style="margin-left:auto;background:var(--accent);border:none;color:#fff;font-size:11px;font-weight:700;padding:2px 8px;border-radius:5px;cursor:pointer">+ New</button>
+  </div>
   <div id="agent-list"><div class="empty-msg">Loading…</div></div>
 
   <div class="sec">Active Locks</div>
@@ -413,6 +431,10 @@
           <label>Slug</label>
           <input id="np-slug" type="text" placeholder="my-product" />
         </div>
+        <div class="field" style="flex:1;min-width:160px;margin:0">
+          <label>GitHub Repo (optional)</label>
+          <input id="np-repo" type="text" placeholder="org/repo" />
+        </div>
       </div>
       <div class="btn-row">
         <button class="btn btn-gh" onclick="createProduct()">Create Product</button>
@@ -442,6 +464,7 @@
 
 </div><!-- /shell -->
 <div id="toast"></div>
+<div id="modal-root"></div>
 
 <script>
 // ── state ──────────────────────────────────────────────────────────────────
@@ -452,8 +475,11 @@ const ROLE_CLR={
   PRODUCT_OWNER:'#8b5cf6',SOLUTION_ARCHITECT:'#6366f1',
   FRONTEND_DEVELOPER:'#22d3ee',BACKEND_DEVELOPER:'#3b82f6',
   INFRA_ADMIN:'#f59e0b',QA_ENGINEER:'#10b981',DEVOPS_ENGINEER:'#ef4444',
-  DATA_ENGINEER:'#f97316',MLOPS_ENGINEER:'#ec4899',DATA_SCIENTIST:'#a855f7',BI_DEVELOPER:'#14b8a6'
+  DATA_ENGINEER:'#f97316',MLOPS_ENGINEER:'#ec4899',DATA_SCIENTIST:'#a855f7',BI_DEVELOPER:'#14b8a6',
+  FLUTTER_DEVELOPER:'#02569B',ANDROID_DEVELOPER:'#3DDC84',IOS_DEVELOPER:'#0a84ff'
 };
+const ALL_ROLES=['PRODUCT_OWNER','SOLUTION_ARCHITECT','FRONTEND_DEVELOPER','BACKEND_DEVELOPER','INFRA_ADMIN','QA_ENGINEER','DEVOPS_ENGINEER','DATA_ENGINEER','MLOPS_ENGINEER','DATA_SCIENTIST','BI_DEVELOPER','FLUTTER_DEVELOPER','ANDROID_DEVELOPER','IOS_DEVELOPER'];
+function roleLabel(r){return (r||'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
 
 // ── tabs ───────────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(t=>{
@@ -618,8 +644,13 @@ function renderBoard(){
       const pr=Object.values(prData).find(p=>p.task===t.id);
       const card=document.createElement('div');
       card.className='card';
+      card.style.position='relative';
+      card.onclick=(e)=>{if(e.target.tagName!=='A'&&!e.target.classList.contains('card-del'))openTaskModal(t.id);};
+      card.title='View task details';
       card.innerHTML=`
-        <div class="ct">${esc(t.title)}</div>
+        <button class="card-del" title="Delete task" onclick="event.stopPropagation();deleteTask(${t.id})"
+          style="position:absolute;top:4px;right:4px;background:transparent;border:none;color:var(--muted);cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;border-radius:4px">×</button>
+        <div class="ct" style="padding-right:16px">${esc(t.title)}</div>
         ${t.assigned_agent?`<div class="ca">👤 ${esc(t.assigned_agent)}</div>`:''}
         <span class="cr">${esc((t.owner_role||'').replace(/_/g,' '))}</span>
         ${pr?.pr_url?`<div class="cpr"><a href="${esc(pr.pr_url)}" target="_blank">↗ PR</a></div>`:''}
@@ -641,7 +672,7 @@ function renderAgents(){
     const color=ROLE_CLR[a.role]||'#6366f1';
     const model=(a.model_name||'').replace('ollama/','');
     const busy=busyNames.has(a.display_name);
-    return `<div class="agent-row">
+    return `<div class="agent-row" style="cursor:pointer" onclick="openAgentModal(${a.id})" title="View / edit agent profile">
       <div class="av" style="background:${color}">${initials(a.display_name)}</div>
       <div class="ai">
         <div class="an">${esc(a.display_name)}</div>
@@ -1099,8 +1130,9 @@ async function uploadRequirement(){
 async function createProduct(){
   const name=document.getElementById('np-name').value.trim();
   const slug=document.getElementById('np-slug').value.trim()||name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+  const github_repo=document.getElementById('np-repo').value.trim();
   if(!name) return toast('Product name required','err');
-  const {ok,data}=await api('POST','/api/v1/workflow/products/',{name,slug,status:'ACTIVE'});
+  const {ok,data}=await api('POST','/api/v1/workflow/products/',{name,slug,github_repo,status:'ACTIVE'});
   const resp=document.getElementById('np-resp');
   if(ok){
     productData[data.id]=data;
@@ -1218,6 +1250,7 @@ async function openRequirement(reqId){
       <span style="font-size:10px;font-weight:600;color:var(--ok)">${esc(data.status)}</span>
       <button class="btn btn-p" style="font-size:11px;padding:5px 12px" onclick="saveRequirement(${reqId})">Save</button>
       <button class="btn btn-i" style="font-size:11px;padding:5px 12px" onclick="replanRequirement(${reqId})">Re-plan</button>
+      <button class="btn btn-e" style="font-size:11px;padding:5px 12px" onclick="deleteRequirement(${reqId})">🗑 Delete</button>
     </div>
     <div style="font-size:10px;color:var(--muted)">
       ${data.file_path ? 'File: '+esc(data.file_path) : 'File not yet saved (will be created on next planning run)'}
@@ -1262,8 +1295,207 @@ function _planningStepLabel(step){
   return '';
 }
 
+// ── modal helpers ──────────────────────────────────────────────────────────
+function openModal(html){
+  const root=document.getElementById('modal-root');
+  root.innerHTML=`<div class="modal-overlay" onclick="if(event.target===this)closeModal()">${html}</div>`;
+}
+function closeModal(){document.getElementById('modal-root').innerHTML='';}
+function linesToList(s){return (s||'').split('\n').map(x=>x.trim()).filter(Boolean);}
+
+// ── requirement delete ─────────────────────────────────────────────────────
+async function deleteRequirement(reqId){
+  const r=reqData[reqId];
+  const name=r?r.title:`#${reqId}`;
+  if(!confirm(`Delete requirement "${name}"?\n\nThis will also delete ALL of its tasks. This cannot be undone.`)) return;
+  const delRepo=confirm('Also EMPTY the product repository?\n\nOK = empty the GitHub repo (and clear local workspace files).\nCancel = keep the repository as-is.');
+  const {ok,data}=await api('DELETE',`/api/v1/workflow/requirements/${reqId}/?delete_repo=${delRepo}`);
+  if(ok){
+    delete reqData[reqId];
+    Object.values(taskData).forEach(t=>{if(t.requirement===reqId)delete taskData[t.id];});
+    _selectedReqId=null;
+    document.getElementById('req-detail-panel').innerHTML='<div style="color:var(--muted);font-size:12px;margin:auto">Requirement deleted</div>';
+    loadRequirements(); renderAll();
+    let msg=`Deleted — ${data.tasks_deleted||0} task(s) removed`;
+    if(delRepo) msg+= data.repo_emptied?', repo emptied':', repo not emptied ('+(data.repo_detail?.github||'')+')';
+    toast(msg);
+  } else {
+    toast('Delete failed: '+JSON.stringify(data),'err');
+  }
+}
+
+// ── agent profile / create ──────────────────────────────────────────────────
+function _agentFormHtml(a){
+  const roleOpts=ALL_ROLES.map(r=>`<option value="${r}" ${a.role===r?'selected':''}>${roleLabel(r)}</option>`).join('');
+  return `
+    <div class="field"><label>Display Name</label><input id="ag-name" type="text" value="${esc(a.display_name||'')}" placeholder="e.g. Jordan Lee"></div>
+    <div style="display:flex;gap:10px">
+      <div class="field" style="flex:2"><label>Role</label><select id="ag-role">${roleOpts}</select></div>
+      <div class="field" style="flex:1"><label>Experience (yrs)</label><input id="ag-exp" type="number" min="0" value="${a.experience_years||0}"></div>
+    </div>
+    <div class="field"><label>Model</label><input id="ag-model" type="text" value="${esc(a.model_name||'ollama/qwen2.5-coder:7b')}"></div>
+    <div class="field"><label>Bio / Persona</label><textarea id="ag-bio" style="min-height:60px">${esc(a.bio||'')}</textarea></div>
+    <div class="field"><label>Skills (one per line)</label><textarea id="ag-skills" style="min-height:90px" placeholder="React&#10;TypeScript&#10;Testing">${esc((a.skills||[]).join('\n'))}</textarea></div>
+    <div class="field"><label>Owned Paths (one per line)</label><textarea id="ag-paths" style="min-height:60px" placeholder="frontend/&#10;src/">${esc((a.allowed_paths||[]).join('\n'))}</textarea></div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px"><input id="ag-enabled" type="checkbox" style="width:auto" ${a.enabled!==false?'checked':''}> Enabled</label></div>`;
+}
+function _agentPayload(){
+  return {
+    display_name:document.getElementById('ag-name').value.trim(),
+    role:document.getElementById('ag-role').value,
+    experience_years:parseInt(document.getElementById('ag-exp').value)||0,
+    model_name:document.getElementById('ag-model').value.trim()||'ollama/qwen2.5-coder:7b',
+    bio:document.getElementById('ag-bio').value.trim(),
+    skills:linesToList(document.getElementById('ag-skills').value),
+    allowed_paths:linesToList(document.getElementById('ag-paths').value),
+    enabled:document.getElementById('ag-enabled').checked,
+  };
+}
+
+function openAgentModal(agentId){
+  const a=agentData[agentId];
+  if(!a){toast('Agent not found','err');return;}
+  const color=ROLE_CLR[a.role]||'#6366f1';
+  openModal(`
+    <div class="modal" style="max-width:640px">
+      <div class="modal-hd">
+        <div class="av" style="background:${color}">${initials(a.display_name)}</div>
+        <h3>${esc(a.display_name)}</h3>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-bd">
+        ${_agentFormHtml(a)}
+        <div class="kv" style="margin-top:8px">
+          <div class="kv-l">Final Agent Prompt (preview)</div>
+          <div class="prompt-box" id="ag-prompt">${esc(a.system_prompt||'')}</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:4px">Save to regenerate from the latest skills.</div>
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-e" onclick="deleteAgent(${a.id})">Delete</button>
+        <button class="btn btn-gh" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-p" onclick="saveAgent(${a.id})">Save Changes</button>
+      </div>
+    </div>`);
+}
+
+function openNewAgentModal(){
+  openModal(`
+    <div class="modal" style="max-width:640px">
+      <div class="modal-hd"><h3>Create New Agent</h3><button class="modal-close" onclick="closeModal()">×</button></div>
+      <div class="modal-bd">${_agentFormHtml({role:'FRONTEND_DEVELOPER',enabled:true,skills:[],allowed_paths:[]})}</div>
+      <div class="modal-ft">
+        <button class="btn btn-gh" onclick="closeModal()">Cancel</button>
+        <button class="btn btn-p" onclick="createAgent()">Create Agent</button>
+      </div>
+    </div>`);
+}
+
+async function createAgent(){
+  const payload=_agentPayload();
+  if(!payload.display_name) return toast('Display name is required','err');
+  const {ok,data}=await api('POST','/api/v1/workflow/agents/',payload);
+  if(ok){agentData[data.id]=data;renderAgents();renderWorkloads();closeModal();toast(`Agent "${data.display_name}" created`);}
+  else toast('Create failed: '+JSON.stringify(data),'err');
+}
+
+async function saveAgent(agentId){
+  const payload=_agentPayload();
+  if(!payload.display_name) return toast('Display name is required','err');
+  const {ok,data}=await api('PATCH',`/api/v1/workflow/agents/${agentId}/`,payload);
+  if(ok){
+    agentData[agentId]=data;
+    renderAgents();renderWorkloads();
+    const box=document.getElementById('ag-prompt');
+    if(box) box.textContent=data.system_prompt||'';
+    toast('Agent saved');
+  } else toast('Save failed: '+JSON.stringify(data),'err');
+}
+
+async function deleteAgent(agentId){
+  const a=agentData[agentId];
+  if(!confirm(`Delete agent "${a?a.display_name:agentId}"?`)) return;
+  const {ok,data}=await api('DELETE',`/api/v1/workflow/agents/${agentId}/`);
+  if(ok){delete agentData[agentId];renderAgents();renderWorkloads();closeModal();toast('Agent deleted');}
+  else toast('Delete failed: '+JSON.stringify(data),'err');
+}
+
+// ── task detail ─────────────────────────────────────────────────────────────
+async function openTaskModal(taskId){
+  openModal(`<div class="modal"><div class="modal-hd"><h3>Task</h3><button class="modal-close" onclick="closeModal()">×</button></div><div class="modal-bd"><div class="empty-msg">Loading…</div></div></div>`);
+  const {ok,data:t}=await api('GET',`/api/v1/workflow/tasks/${taskId}/`);
+  if(!ok){document.querySelector('#modal-root .modal-bd').innerHTML='<div style="color:var(--err)">Failed to load task</div>';return;}
+  const pr=Object.values(prData).find(p=>p.task===t.id);
+  const crit=(t.acceptance_criteria||'').trim();
+  const critHtml=crit?crit.split('\n').filter(Boolean).map(c=>`<div style="display:flex;gap:6px"><span style="color:var(--ok)">✓</span><span>${esc(c.replace(/^[-*]\s*/,''))}</span></div>`).join(''):'<span style="color:var(--muted)">None specified</span>';
+  const files=(t.planned_files||[]);
+  const tech=(t.tech_stack||[]);
+  const deps=(t.dependencies||[]).map(d=>esc(d.depends_on_title||('Task '+d.depends_on_task))).join(', ')||'<span style="color:var(--muted)">None</span>';
+  openModal(`
+    <div class="modal" style="max-width:660px">
+      <div class="modal-hd">
+        <h3>${esc(t.title)}</h3>
+        <button class="modal-close" onclick="closeModal()">×</button>
+      </div>
+      <div class="modal-bd">
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+          <span class="pill" style="color:var(--accent2)">${esc(roleLabel(t.owner_role))}</span>
+          <span class="pill">${esc((t.status||'').replace(/_/g,' '))}</span>
+          ${t.estimate?`<span class="pill">Estimate: ${esc(t.estimate)}</span>`:''}
+          ${t.assigned_agent?`<span class="pill">👤 ${esc(t.assigned_agent)}</span>`:''}
+        </div>
+        <div class="kv"><div class="kv-l">Description</div><div class="kv-v">${esc(t.clean_description||t.description||'')}</div></div>
+        <div class="kv"><div class="kv-l">Acceptance Criteria</div><div class="kv-v">${critHtml}</div></div>
+        ${tech.length?`<div class="kv"><div class="kv-l">Tech Stack</div><div>${tech.map(x=>`<span class="pill">${esc(x)}</span>`).join('')}</div></div>`:''}
+        ${files.length?`<div class="kv"><div class="kv-l">Planned Files</div><div class="kv-v" style="font-family:monospace;font-size:12px">${files.map(f=>esc(f)).join('<br>')}</div></div>`:''}
+        <div class="kv"><div class="kv-l">Depends On</div><div class="kv-v">${deps}</div></div>
+        ${pr?.pr_url||t.pr_url?`<div class="kv"><div class="kv-l">Pull Request</div><div><a class="pi-link" href="${esc(pr?.pr_url||t.pr_url)}" target="_blank">View PR ↗</a></div></div>`:''}
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-e" onclick="deleteTask(${t.id})">🗑 Delete</button>
+        <button class="btn btn-gh" onclick="closeModal()">Close</button>
+      </div>
+    </div>`);
+}
+
+async function deleteTask(taskId){
+  const t=taskData[taskId];
+  if(!confirm(`Delete task "${t?t.title:('#'+taskId)}"?\n\nThis removes the task and its dependencies, locks and PR record. This cannot be undone.`)) return;
+  const {ok,status,data}=await api('DELETE',`/api/v1/workflow/tasks/${taskId}/`);
+  // 404 → the task is already gone (e.g. a stale card); treat as success and clear it.
+  if(ok||status===404){
+    delete taskData[taskId];
+    Object.keys(prData).forEach(k=>{if(prData[k].task===taskId)delete prData[k];});
+    closeModal();
+    renderAll();
+    populateCodeTaskSelect();
+    toast(status===404?'Task already removed':'Task deleted');
+  } else {
+    toast('Delete failed: '+JSON.stringify(data),'err');
+  }
+}
+
+// close modal on Escape
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal();});
+
+// Set the SSE cursor to the most recent event so the stream does NOT replay the
+// entire event history on load (which would resurrect deleted tasks as phantom
+// cards). loadAll() is the source of truth for current state; SSE only carries
+// changes from here on.
+async function initEventCursor(){
+  try{
+    const r=await fetch('/api/v1/workflow/events/recent/?limit=1');
+    if(r.ok){
+      const d=await r.json();
+      const arr=d.results||d;
+      if(arr.length&&arr[0].id) lastEvId=arr[0].id;
+    }
+  }catch(e){/* ignore — fall back to full stream */}
+}
+
 // ── boot ───────────────────────────────────────────────────────────────────
-loadAll().then(()=>{
+loadAll().then(async ()=>{
+  await initEventCursor();
   connectSSE();
   populateCodeTaskSelect();
   checkOllama();

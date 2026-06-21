@@ -161,6 +161,42 @@ class RequirementViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save()
 
+    def destroy(self, request, *args, **kwargs):
+        """DELETE /api/v1/workflow/requirements/{id}/
+
+        Deletes the requirement and ALL of its tasks by default (tasks would
+        otherwise be orphaned, since Task.requirement is SET_NULL).
+
+        Pass ?delete_repo=true (or {"delete_repo": true} in the body) to ALSO
+        empty the product's GitHub repository.
+        """
+        requirement = self.get_object()
+        product = requirement.product
+
+        delete_repo = str(
+            request.query_params.get('delete_repo')
+            or (request.data.get('delete_repo') if hasattr(request, 'data') else None)
+            or ''
+        ).lower() in ('1', 'true', 'yes', 'on')
+
+        # Delete all tasks for this requirement (cascades PRs, locks, dependencies).
+        task_count = Task.objects.filter(requirement=requirement).count()
+        Task.objects.filter(requirement=requirement).delete()
+
+        repo_result = None
+        if delete_repo:
+            from apps.workflow.autonomous.executor import empty_github_repo
+            repo_result = empty_github_repo(product.slug, getattr(product, 'github_repo', ''))
+
+        requirement.delete()
+
+        return Response({
+            'deleted': True,
+            'tasks_deleted': task_count,
+            'repo_emptied': bool(repo_result and repo_result.get('emptied')),
+            'repo_detail': repo_result,
+        }, status=status.HTTP_200_OK)
+
     @action(detail=True, methods=['post'])
     def plan(self, request, pk=None):
         """POST /api/v1/workflow/requirements/{id}/plan
@@ -420,6 +456,17 @@ class AgentProfileViewSet(viewsets.ModelViewSet):
 
         agents = AgentProfile.objects.filter(role=role)
         return Response(self.get_serializer(agents, many=True).data)
+
+    @action(detail=True, methods=['get'])
+    def prompt(self, request, pk=None):
+        """GET /api/v1/workflow/agents/{id}/prompt
+        Return the final composed system prompt for this agent."""
+        agent = self.get_object()
+        return Response({
+            'agent': agent.display_name,
+            'role': agent.role,
+            'system_prompt': agent.build_system_prompt(),
+        })
 
 
 class PullRequestRecordViewSet(viewsets.ModelViewSet):
