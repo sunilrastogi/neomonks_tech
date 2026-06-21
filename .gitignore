@@ -6,3 +6,5 @@ dist/
 build/
 .pytest_cache/
 .vscode/
+# data backups (may contain secret ciphertext)
+backup_*.json

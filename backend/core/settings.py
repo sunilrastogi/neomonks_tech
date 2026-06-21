@@ -68,21 +68,40 @@ if not DEBUG and not CONFIG_ENCRYPTION_KEY:
 
 # Application definition
 
-INSTALLED_APPS = [
-    'django.contrib.admin',
-    'django.contrib.auth',
+# ── Multi-tenancy (django-tenants): schema-per-tenant ─────────────────────────
+# SHARED_APPS live in the public schema (tenant metadata / control plane).
+# TENANT_APPS are created once per tenant schema (the product itself).
+SHARED_APPS = [
+    'django_tenants',
+    'apps.tenancy',
     'django.contrib.contenttypes',
+    'django.contrib.staticfiles',
+]
+
+TENANT_APPS = [
+    'django.contrib.auth',
+    'django.contrib.admin',
     'django.contrib.sessions',
     'django.contrib.messages',
-    'django.contrib.staticfiles',
     'django.contrib.postgres',
     'rest_framework',
     'django_filters',
-    'apps.realtime',
+    'apps.accounts',
     'apps.workflow',
+    'apps.realtime',
 ]
 
+INSTALLED_APPS = list(SHARED_APPS) + [app for app in TENANT_APPS if app not in SHARED_APPS]
+
+TENANT_MODEL = 'tenancy.Organization'
+TENANT_DOMAIN_MODEL = 'tenancy.Domain'
+
+# Per-tenant users (each tenant schema has its own user table).
+AUTH_USER_MODEL = 'accounts.User'
+
 MIDDLEWARE = [
+    # Must be first: resolves the tenant schema from the request host.
+    'django_tenants.middleware.main.TenantMainMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -117,7 +136,8 @@ WSGI_APPLICATION = 'core.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        # django-tenants backend manages the per-request schema search path.
+        'ENGINE': 'django_tenants.postgresql_backend',
         'NAME':     os.environ.get('DB_NAME',     'neomonks_core'),
         'USER':     os.environ.get('DB_USER',     'neomonks'),
         'PASSWORD': os.environ.get('DB_PASSWORD', 'neomonks_dev'),
@@ -128,6 +148,9 @@ DATABASES = {
         },
     }
 }
+
+# Route reads/writes to the correct schema for the active tenant.
+DATABASE_ROUTERS = ('django_tenants.routers.TenantSyncRouter',)
 
 
 # Password validation

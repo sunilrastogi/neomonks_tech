@@ -68,9 +68,12 @@ plaintext columns. Encrypt them at rest.
 SaaS, subdomain-per-tenant, SSO (Azure AD) + email/password, seat packages +
 pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md).
 
-- [x] Design doc written — **awaiting product-owner sign-off** (open questions §11)
-- [ ] **3a** Tenancy core: `apps.tenancy`, `Organization`, custom email `User`,
-      subdomain `TenantMiddleware`
+- [x] Design doc written (schema-per-tenant via django-tenants)
+- [~] **3a** Tenancy core: `apps.tenancy` (Organization/Domain), `apps.accounts`
+      custom email `User`, SHARED/TENANT split, `TenantMainMiddleware`, router.
+      **Validated on a fresh DB** (schema auto-creation, cross-tenant isolation,
+      subdomain→schema routing all pass). **Live DB cutover pending** (gated —
+      destructive; backup taken in `backup_workflow_pre_tenants.json`)
 - [ ] **3b** Authn: email/password scoped to org, sessions, password reset,
       API keys; flip DRF default to `IsAuthenticated`
 - [ ] **3c** Org-scope every domain model + enforced querysets + cross-tenant
