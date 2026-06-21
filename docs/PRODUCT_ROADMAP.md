@@ -63,17 +63,21 @@ plaintext columns. Encrypt them at rest.
 > and masking still hides the raw secret. Only the live `migrate` apply + DB
 > round-trip remain.
 
-## Checkpoint 3 — Auth, RBAC & multi-tenancy  `[ ]`
+## Checkpoint 3 — Auth, RBAC & multi-tenancy  `[~]`
 
-The real foundation. Design doc first, then implement.
+SaaS, subdomain-per-tenant, SSO (Azure AD) + email/password, seat packages +
+pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md).
 
-- [ ] Design doc: tenancy model (Org → Workspace → Product), role model
-      (Owner / Admin / Reviewer / Viewer), token model (user session + API keys)
-- [ ] Replace `AllowAny` default permission; require auth on all API
-- [ ] OIDC / SSO support for enterprise
-- [ ] Per-org isolation enforced on every model and query
-- [ ] Move `PlatformConfiguration` from global singleton to per-org/workspace
-- [ ] Audit: every privileged action attributed to a user
+- [x] Design doc written — **awaiting product-owner sign-off** (open questions §11)
+- [ ] **3a** Tenancy core: `apps.tenancy`, `Organization`, custom email `User`,
+      subdomain `TenantMiddleware`
+- [ ] **3b** Authn: email/password scoped to org, sessions, password reset,
+      API keys; flip DRF default to `IsAuthenticated`
+- [ ] **3c** Org-scope every domain model + enforced querysets + cross-tenant
+      isolation tests; `PlatformConfiguration` becomes per-org
+- [ ] **3d** RBAC: Owner/Admin/Member/Viewer + `HasOrgRole`; user management
+- [ ] **3e** SSO (Azure AD / OIDC) per-org via Authlib + JIT provisioning
+- [ ] **3f** Billing: Stripe seat packages + enforcement + PAYG metering + webhooks
 
 ---
 
