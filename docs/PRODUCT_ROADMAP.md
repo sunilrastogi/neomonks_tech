@@ -79,8 +79,12 @@ pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md)
       (`Api-Key` header auth + management endpoints). DRF default flipped to
       `IsAuthenticated`; realtime/dashboard endpoints gated. Verified end-to-end.
       _(Password-reset-via-email deferred — needs SMTP config.)_
-- [ ] **3c** Org-scope every domain model + enforced querysets + cross-tenant
-      isolation tests; `PlatformConfiguration` becomes per-org
+- [x] **3c** Tenant-context for background work: `submit()` captures the caller's
+      schema and re-enters it in the worker; standalone loop iterates all tenants
+      (`iterate_all_tenants`, `run_loop --schema`); executor semaphore + planner
+      keys schema-qualified. Automated isolation tests (4) pass: product + user
+      isolation, per-tenant `PlatformConfiguration`, `submit` schema preservation.
+      _(No org columns needed — schema is the boundary.)_
 - [ ] **3d** RBAC: Owner/Admin/Member/Viewer + `HasOrgRole`; user management
 - [ ] **3e** SSO (Azure AD / OIDC) per-org via Authlib + JIT provisioning
 - [ ] **3f** Billing: Stripe seat packages + enforcement + PAYG metering + webhooks

@@ -19,6 +19,8 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--product-id", type=int, default=None,
                             help="Limit loop to a single product.")
+        parser.add_argument("--schema", type=str, default=None,
+                            help="Limit loop to a single tenant schema (default: all tenants).")
         parser.add_argument("--once", action="store_true",
                             help="Run a single iteration then exit.")
 
@@ -27,11 +29,17 @@ class Command(BaseCommand):
 
         loop = AutonomousLoop()
         product_id = options.get("product_id")
+        schema = options.get("schema")
         run_once = options.get("once", False)
 
         if run_once:
             self.stdout.write("Running one loop iteration…")
-            summary = loop.run_once(product_id=product_id)
+            if schema:
+                from django_tenants.utils import schema_context
+                with schema_context(schema):
+                    summary = loop.run_once(product_id=product_id)
+            else:
+                summary = loop.iterate_all_tenants(product_id=product_id)
             self.stdout.write(self.style.SUCCESS(f"Done: {summary}"))
             return
 

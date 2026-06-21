@@ -37,16 +37,20 @@ from apps.workflow.services.task_dispatcher import TaskDispatcher
 
 logger = logging.getLogger(__name__)
 
-# One semaphore per task to prevent double-execution
-_task_locks: dict[int, threading.Lock] = {}
+# One semaphore per task to prevent double-execution.
+# Keyed by (schema, task_id): task ids are only unique *within* a tenant schema,
+# so a bare task_id would wrongly serialise unrelated tasks across tenants.
+_task_locks: dict[tuple[str, int], threading.Lock] = {}
 _task_locks_mutex = threading.Lock()
 
 
 def _task_semaphore(task_id: int) -> threading.Lock:
+    from django.db import connection
+    key = (getattr(connection, "schema_name", "public"), task_id)
     with _task_locks_mutex:
-        if task_id not in _task_locks:
-            _task_locks[task_id] = threading.Lock()
-        return _task_locks[task_id]
+        if key not in _task_locks:
+            _task_locks[key] = threading.Lock()
+        return _task_locks[key]
 
 
 # ── Agent prompt template ─────────────────────────────────────────────────────

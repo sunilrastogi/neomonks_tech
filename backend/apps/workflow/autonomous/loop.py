@@ -97,7 +97,7 @@ class AutonomousLoop:
         while not self._stop_event.is_set():
             try:
                 close_old_connections()
-                self._iterate()
+                self.iterate_all_tenants()
             except Exception as exc:
                 logger.exception("Loop iteration failed: %s", exc)
                 with _status_lock:
@@ -106,6 +106,33 @@ class AutonomousLoop:
                     )
                     _loop_status["errors"] = _loop_status["errors"][-10:]
             self._stop_event.wait(self.POLL_INTERVAL)
+
+    def iterate_all_tenants(self, product_id: int | None = None, force_sync: bool = False) -> dict:
+        """Run one iteration for every tenant schema (used by the global loop).
+
+        Each tenant runs in its own schema context; a failure in one tenant is
+        logged and does not stop the others.
+        """
+        from django_tenants.utils import (
+            get_public_schema_name, get_tenant_model, schema_context,
+        )
+
+        public = get_public_schema_name()
+        totals: dict = {"planned": 0, "dispatched": 0, "executed": 0, "synced": 0, "locks_expired": 0}
+        for tenant in get_tenant_model().objects.exclude(schema_name=public):
+            try:
+                with schema_context(tenant.schema_name):
+                    summary = self._iterate(product_id=product_id, force_sync=force_sync)
+                for key, val in summary.items():
+                    totals[key] = totals.get(key, 0) + val
+            except Exception as exc:
+                logger.exception("Loop: tenant '%s' iteration failed: %s", tenant.schema_name, exc)
+                with _status_lock:
+                    _loop_status["errors"].append(
+                        {"ts": time.time(), "msg": f"tenant {tenant.schema_name}: {str(exc)[:150]}"}
+                    )
+                    _loop_status["errors"] = _loop_status["errors"][-10:]
+        return totals
 
     def _iterate(self, product_id: int | None = None, force_sync: bool = False) -> dict:  # noqa: C901
         from apps.workflow.autonomous.executor import AutonomousExecutor
@@ -149,21 +176,25 @@ class AutonomousLoop:
             status=RequirementStatus.RECEIVED,
             product_id__in=product_ids,
         )
+        from django.db import connection as _conn
+        _schema = getattr(_conn, "schema_name", "public")
         for req in pending_reqs:
-            if req.id in self._planning_threads and self._planning_threads[req.id].is_alive():
+            key = (_schema, req.id)
+            existing = self._planning_threads.get(key)
+            if existing is not None and not existing.done():
                 logger.debug("Loop: planner already running for req %d", req.id)
                 continue
             logger.info("Loop: spawning planner for req %d — %s", req.id, req.title)
             from apps.workflow.autonomous.thread_pool import submit
             future = submit(self._run_planner, req.id, AutonomousPlanner())
             # Store future so we can check is_alive equivalent via future.done()
-            self._planning_threads[req.id] = future
+            self._planning_threads[key] = future
             summary["planned"] += 1
 
-        # Update status
+        # Update status (report req ids of in-flight planners)
         with _status_lock:
             _loop_status["active_planners"] = [
-                rid for rid, f in self._planning_threads.items() if not f.done()
+                rid for (_sch, rid), f in self._planning_threads.items() if not f.done()
             ]
 
         # ── 2. DISPATCH ──────────────────────────────────────────────────
