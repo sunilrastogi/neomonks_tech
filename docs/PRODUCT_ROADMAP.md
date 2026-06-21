@@ -91,7 +91,12 @@ pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md)
       Admin user-management endpoints (`/api/v1/auth/users/`, create/list/update/
       deactivate; only Owner grants Owner). 6 RBAC tests pass.
 - [ ] **3e** SSO (Azure AD / OIDC) per-org via Authlib + JIT provisioning
-- [ ] **3f** Billing: Stripe seat packages + enforcement + PAYG metering + webhooks
+      _(deferred — needs an Azure app registration for live verification)_
+- [x] **3f** Billing: shared `apps.billing` (`Subscription` + `UsageRecord` keyed
+      by Organization). Seat packages + enforcement on user creation (HTTP 402
+      when full); pay-as-you-go usage metering (AGENT_RUN recorded by the executor);
+      subscription + usage API; Stripe checkout + signature-verified webhook
+      (graceful when keys absent). 5 billing tests pass (15 total).
 
 ---
 

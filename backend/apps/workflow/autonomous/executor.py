@@ -421,6 +421,13 @@ class AutonomousExecutor:
             logger.info("Executor: task %d already running in another thread, skipping", task_id)
             return
         try:
+            # Pay-as-you-go metering: one billable agent run per execution.
+            try:
+                from apps.billing.services import record_usage
+                from apps.billing.models import UsageEventType
+                record_usage(UsageEventType.AGENT_RUN, quantity=1, task_id=task_id)
+            except Exception:
+                pass  # metering must never block execution
             self._execute(task_id)
         except Exception as exc:
             logger.exception("Executor: unhandled error for task %d: %s", task_id, exc)

@@ -151,3 +151,77 @@ class RBACTests(TenantTestCase):
                           format="json", HTTP_HOST=self.host)
         self.assertEqual(r.status_code, 201)
         self.assertTrue(User.objects.filter(email="m2@t.test", role=Role.MEMBER).exists())
+
+
+@override_settings(ALLOWED_HOSTS=["*"])
+class BillingTests(TenantTestCase):
+    """Seat enforcement, usage metering, subscription API, and webhook handling."""
+
+    def setUp(self):
+        super().setUp()
+        from apps.billing.services import get_or_create_subscription
+
+        self.host = self.tenant.get_primary_domain().domain
+        self.sub = get_or_create_subscription(self.tenant)
+        self.sub.seats_purchased = 2
+        self.sub.status = "ACTIVE"
+        self.sub.save()
+        # Creating this admin directly counts as 1 active seat.
+        self.admin = User.objects.create_user("admin@b.test", password="pw", role=Role.ADMIN)
+        self.api = APIClient()
+        self.api.force_authenticate(self.admin)
+
+    def test_seat_limit_is_enforced(self):
+        # 1 used, 2 seats → one more allowed (→2), then blocked.
+        r1 = self.api.post("/api/v1/auth/users/",
+                           {"email": "u1@b.test", "role": Role.MEMBER, "password": "password123"},
+                           format="json", HTTP_HOST=self.host)
+        self.assertEqual(r1.status_code, 201)
+        r2 = self.api.post("/api/v1/auth/users/",
+                           {"email": "u2@b.test", "role": Role.MEMBER, "password": "password123"},
+                           format="json", HTTP_HOST=self.host)
+        self.assertEqual(r2.status_code, 402)  # seat limit
+
+    def test_subscription_endpoint_reports_seats(self):
+        r = self.api.get("/api/v1/billing/subscription/", HTTP_HOST=self.host)
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["seats_purchased"], 2)
+        self.assertIn("seats_used", body)
+        self.assertIn("seats_available", body)
+
+    def test_usage_recording_and_summary(self):
+        from apps.billing.models import UsageEventType
+        from apps.billing.services import record_usage
+
+        record_usage(UsageEventType.AGENT_RUN, quantity=2, task_id=5)
+        record_usage(UsageEventType.AGENT_RUN, quantity=1)
+        r = self.api.get("/api/v1/billing/usage/", HTTP_HOST=self.host)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["usage"].get("AGENT_RUN"), 3)
+
+    def test_webhook_event_updates_subscription(self):
+        from apps.billing.services import apply_webhook_event
+
+        self.sub.stripe_customer_id = "cus_test"
+        self.sub.save()
+        event = {
+            "type": "customer.subscription.updated",
+            "data": {"object": {
+                "customer": "cus_test",
+                "status": "past_due",
+                "items": {"data": [{"quantity": 10}]},
+            }},
+        }
+        handled = apply_webhook_event(event)
+        self.sub.refresh_from_db()
+        self.assertTrue(handled)
+        self.assertEqual(self.sub.seats_purchased, 10)
+        self.assertEqual(self.sub.status, "PAST_DUE")
+
+    def test_checkout_requires_stripe_config(self):
+        owner = User.objects.create_user("owner@b.test", password="pw", role=Role.OWNER)
+        self.api.force_authenticate(owner)
+        r = self.api.post("/api/v1/billing/checkout/", {"plan": "team_10"},
+                          format="json", HTTP_HOST=self.host)
+        self.assertEqual(r.status_code, 503)  # billing not configured (no Stripe key)

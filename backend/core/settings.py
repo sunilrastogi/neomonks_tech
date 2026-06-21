@@ -74,6 +74,7 @@ if not DEBUG and not CONFIG_ENCRYPTION_KEY:
 SHARED_APPS = [
     'django_tenants',
     'apps.tenancy',
+    'apps.billing',
     'django.contrib.contenttypes',
     'django.contrib.staticfiles',
 ]
@@ -102,6 +103,20 @@ AUTH_USER_MODEL = 'accounts.User'
 # Where @login_required sends unauthenticated users, and where login returns to.
 LOGIN_URL = '/login/'
 LOGIN_REDIRECT_URL = '/api/v1/realtime/dashboard/'
+
+# ── Billing (Stripe) ──────────────────────────────────────────────────────────
+# Empty keys → billing endpoints degrade gracefully (no live calls). Seat
+# enforcement and usage metering work regardless of Stripe configuration.
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY', '')
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+# Stripe Price IDs per seat package (set in production).
+STRIPE_PRICES = {
+    'team_5':  os.environ.get('STRIPE_PRICE_TEAM_5', ''),
+    'team_10': os.environ.get('STRIPE_PRICE_TEAM_10', ''),
+    'team_25': os.environ.get('STRIPE_PRICE_TEAM_25', ''),
+    'team_50': os.environ.get('STRIPE_PRICE_TEAM_50', ''),
+}
 
 MIDDLEWARE = [
     # Must be first: resolves the tenant schema from the request host.

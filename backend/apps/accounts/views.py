@@ -77,6 +77,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("Only an Owner can assign the Owner role.")
 
     def perform_create(self, serializer):
+        from apps.billing.services import assert_can_add_user
+        assert_can_add_user()  # raises SeatLimitExceeded (HTTP 402) when full
         self._guard_owner_role(serializer)
         serializer.save()
 

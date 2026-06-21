@@ -26,5 +26,6 @@ urlpatterns = [
     path('api/v1/workflow/', include('apps.workflow.api.urls')),
     path('api/v1/realtime/', include('apps.realtime.urls')),
     path('api/v1/auth/', include((accounts_api, 'accounts'))),
+    path('api/v1/billing/', include('apps.billing.urls')),
     *accounts_pages,
 ] + staticfiles_urlpatterns()
