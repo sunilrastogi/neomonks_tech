@@ -463,3 +463,94 @@ class WorkflowEvent(models.Model):
 
     def __str__(self):
         return f"{self.event_type} for {self.entity_type} {self.entity_id}"
+
+
+class LLMMode(TextChoices):
+    """Where the platform's LLM runs."""
+    ONLINE = "ONLINE", "Online (hosted API)"
+    LOCAL = "LOCAL", "Local (Ollama)"
+
+
+class LLMProvider(TextChoices):
+    """Hosted LLM providers selectable when LLM mode is ONLINE."""
+    OPENAI = "OPENAI", "OpenAI"
+    ANTHROPIC = "ANTHROPIC", "Anthropic"
+    GOOGLE = "GOOGLE", "Google Gemini"
+    GROQ = "GROQ", "Groq"
+    MISTRAL = "MISTRAL", "Mistral"
+    OPENROUTER = "OPENROUTER", "OpenRouter"
+
+
+class PlatformConfiguration(models.Model):
+    """Singleton holding editable platform connection settings.
+
+    Stores database, LLM and GitHub connection details that are otherwise
+    sourced from environment variables / Django settings. Always loaded via
+    ``PlatformConfiguration.load()`` which guarantees a single row (pk=1).
+    """
+
+    # ── Database ──────────────────────────────────────────────────────────
+    db_engine = models.CharField(max_length=255, blank=True, default="django.db.backends.postgresql")
+    db_name = models.CharField(max_length=255, blank=True, default="")
+    db_user = models.CharField(max_length=255, blank=True, default="")
+    db_password = models.CharField(max_length=255, blank=True, default="")
+    db_host = models.CharField(max_length=255, blank=True, default="")
+    db_port = models.CharField(max_length=10, blank=True, default="")
+
+    # ── LLM ───────────────────────────────────────────────────────────────
+    llm_mode = models.CharField(max_length=20, choices=LLMMode.choices, default=LLMMode.LOCAL)
+    # Online provider settings
+    llm_provider = models.CharField(max_length=20, choices=LLMProvider.choices, blank=True, default=LLMProvider.OPENAI)
+    llm_api_key = models.CharField(max_length=255, blank=True, default="")
+    llm_model = models.CharField(max_length=255, blank=True, default="")
+    # Local (Ollama) settings
+    ollama_host = models.CharField(max_length=255, blank=True, default="")
+    ollama_model = models.CharField(max_length=255, blank=True, default="")
+    ollama_models_path = models.CharField(max_length=500, blank=True, default="")
+
+    # ── GitHub ────────────────────────────────────────────────────────────
+    github_token = models.CharField(max_length=255, blank=True, default="")
+    github_repo = models.CharField(max_length=255, blank=True, default="")
+    github_base_branch = models.CharField(max_length=255, blank=True, default="main")
+
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Platform configuration"
+        verbose_name_plural = "Platform configuration"
+
+    def __str__(self):
+        return "Platform configuration"
+
+    def save(self, *args, **kwargs):
+        # Enforce singleton: there is only ever one row, pk=1.
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls) -> "PlatformConfiguration":
+        """Return the singleton, seeding defaults from Django settings on first use."""
+        from django.conf import settings
+
+        obj = cls.objects.filter(pk=1).first()
+        if obj is not None:
+            return obj
+
+        db = settings.DATABASES.get("default", {})
+        default_model = getattr(settings, "DEFAULT_AGENT_MODEL", "ollama/qwen2.5-coder:7b")
+        return cls.objects.create(
+            pk=1,
+            db_engine=db.get("ENGINE", "django.db.backends.postgresql"),
+            db_name=db.get("NAME", ""),
+            db_user=db.get("USER", ""),
+            db_password=db.get("PASSWORD", ""),
+            db_host=db.get("HOST", ""),
+            db_port=str(db.get("PORT", "")),
+            llm_mode=LLMMode.LOCAL,
+            ollama_host=getattr(settings, "OLLAMA_HOST", "http://localhost:11434"),
+            ollama_model=default_model.replace("ollama/", ""),
+            ollama_models_path=getattr(settings, "OLLAMA_MODELS_PATH", ""),
+            github_token=getattr(settings, "GITHUB_TOKEN", ""),
+            github_repo=getattr(settings, "GITHUB_REPO", ""),
+            github_base_branch=getattr(settings, "GITHUB_BASE_BRANCH", "main"),
+        )

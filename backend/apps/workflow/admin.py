@@ -2,7 +2,8 @@
 from django.contrib import admin
 from apps.workflow.models import (
     Product, Requirement, ArchitectureArtifact, Task, TaskDependency,
-    FileLock, AgentProfile, PullRequestRecord, ApprovalRecord, WorkflowEvent
+    FileLock, AgentProfile, PullRequestRecord, ApprovalRecord, WorkflowEvent,
+    PlatformConfiguration
 )
 
 
@@ -82,3 +83,9 @@ class WorkflowEventAdmin(admin.ModelAdmin):
     search_fields = ('event_type', 'entity_type')
     list_filter = ('event_type', 'entity_type', 'created_at')
     readonly_fields = ('created_at',)
+
+
+@admin.register(PlatformConfiguration)
+class PlatformConfigurationAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'llm_mode', 'github_repo', 'updated_at')
+    readonly_fields = ('updated_at',)

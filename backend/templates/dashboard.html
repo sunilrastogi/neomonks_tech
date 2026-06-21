@@ -116,6 +116,20 @@
     .field input:focus, .field select:focus, .field textarea:focus { border-color:var(--accent); }
     .field textarea { resize:vertical; min-height:120px; }
 
+    /* config (master-detail) */
+    .cfg-shell { display:grid; grid-template-columns:230px 1fr; gap:16px; max-width:1000px; align-items:start; }
+    .cfg-nav { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:8px; }
+    .cfg-nav-item { display:flex; align-items:center; gap:11px; padding:10px 12px; border-radius:7px; cursor:pointer; color:var(--muted); border:1px solid transparent; transition:.15s; margin-bottom:2px; }
+    .cfg-nav-item:hover { background:var(--bg); color:var(--text); }
+    .cfg-nav-item.on { background:rgba(99,102,241,.1); color:var(--accent); border-color:rgba(99,102,241,.3); }
+    .cfg-nav-ic { font-size:17px; line-height:1; flex-shrink:0; }
+    .cfg-nav-title { font-size:13px; font-weight:600; }
+    .cfg-nav-sub { font-size:10px; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:150px; }
+    .cfg-detail { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:22px; min-height:420px; }
+    .cfg-detail h2 { font-size:16px; font-weight:700; margin-bottom:5px; color:var(--accent2); }
+    .cfg-detail .cfg-desc { font-size:12px; color:var(--muted); margin-bottom:18px; line-height:1.55; max-width:620px; }
+    .cfg-detail .field { max-width:560px; }
+
     /* buttons */
     .btn { display:inline-flex; align-items:center; gap:5px; padding:7px 14px; border-radius:6px; font-size:12px; font-weight:600; cursor:pointer; border:none; transition:opacity .15s; }
     .btn:hover { opacity:.85; }
@@ -194,6 +208,7 @@
     <div class="tab" data-pg="requirements">Requirements</div>
     <div class="tab" data-pg="board">Task Board</div>
     <div class="tab" data-pg="code">Code</div>
+    <div class="tab" data-pg="config">Configurations</div>
     <div class="tab" data-pg="upload">+ New Requirement</div>
   </nav>
   <span class="loop-badge stopped" id="loop-badge">Loop: stopped</span>
@@ -374,6 +389,20 @@
         <pre id="code-content" style="flex:1;overflow:auto;padding:14px;font-family:monospace;font-size:12px;line-height:1.6;color:var(--text);margin:0;white-space:pre-wrap;word-break:break-all"><span style="color:var(--muted)">← Click a file to view its content</span></pre>
       </div>
 
+    </div>
+  </div>
+
+  <!-- ── CONFIGURATIONS tab ── -->
+  <div class="page" id="pg-config">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+      <span style="font-size:14px;font-weight:700">Configurations</span>
+      <span style="font-size:11px;color:var(--muted)">Connection settings for the database, LLM provider and GitHub. Secrets are stored masked.</span>
+      <button class="btn btn-gh" style="margin-left:auto;font-size:11px;padding:5px 12px" onclick="loadConfig()">&#8635; Reload</button>
+    </div>
+
+    <div class="cfg-shell">
+      <div class="cfg-nav" id="cfg-nav"></div>
+      <div class="cfg-detail" id="cfg-detail"><div class="empty-msg">Loading…</div></div>
     </div>
   </div>
 
@@ -1294,6 +1323,221 @@ function _planningStepLabel(step){
   if(SA_STEPS.has(step))  return '[SA] ';
   return '';
 }
+
+// ── configurations tab (master-detail) ─────────────────────────────────────
+let _configLoaded = false;
+const _cfgState = { active:'db', data:{}, provider:null, engine:null };
+
+// Each LLM provider declares its own field set, so the form only shows what it needs
+// (e.g. Ollama has host/model/path and NO api key; hosted providers have api key + model).
+const LLM_PROVIDERS = {
+  OLLAMA:    { label:'Ollama (Local)',  mode:'LOCAL',  model:'qwen2.5-coder:7b' },
+  OPENAI:    { label:'OpenAI',          mode:'ONLINE', model:'gpt-4o' },
+  ANTHROPIC: { label:'Anthropic',       mode:'ONLINE', model:'claude-opus-4-8' },
+  GOOGLE:    { label:'Google Gemini',   mode:'ONLINE', model:'gemini-1.5-pro' },
+  GROQ:      { label:'Groq',            mode:'ONLINE', model:'llama-3.3-70b-versatile' },
+  MISTRAL:   { label:'Mistral',         mode:'ONLINE', model:'mistral-large-latest' },
+  OPENROUTER:{ label:'OpenRouter',      mode:'ONLINE', model:'anthropic/claude-3.5-sonnet' },
+};
+const DB_ENGINES = {
+  'django.db.backends.postgresql':'PostgreSQL',
+  'django.db.backends.mysql':'MySQL',
+  'django.db.backends.sqlite3':'SQLite',
+};
+
+// ── field builders ──
+function _f(label, inner, hint='', style=''){
+  return `<div class="field"${style?` style="${style}"`:''}><label>${label}${hint}</label>${inner}</div>`;
+}
+function _input(key, val, ph, type='text'){
+  return `<input id="cf-${key}" type="${type}" value="${esc(val||'')}" placeholder="${esc(ph||'')}">`;
+}
+function _secret(key, ph='leave blank to keep current'){
+  return `<input id="cf-${key}" type="password" value="" placeholder="${esc(ph)}">`;
+}
+function _select(id, val, opts, onchange=''){
+  return `<select id="${id}"${onchange?` onchange="${onchange}"`:''}>`+
+    opts.map(([v,l])=>`<option value="${v}" ${v===val?'selected':''}>${esc(l)}</option>`).join('')+
+    `</select>`;
+}
+function _hintHtml(isSet, masked){
+  const txt = isSet ? `(current: ${esc(masked)})` : '(not set)';
+  return ` <span style="color:var(--muted);font-weight:400">${txt}</span>`;
+}
+function _detailShell(title, desc, fields, section){
+  return `<h2>${title}</h2><div class="cfg-desc">${desc}</div>${fields}
+    <div class="btn-row">
+      <button class="btn btn-p" onclick="saveConfig('${section}')">Save</button>
+      <button class="btn btn-gh" onclick="testConfig('${section}')">Test Connection</button>
+    </div>
+    <div id="cfg-resp" style="margin-top:12px;font-size:12px;color:var(--muted)"></div>`;
+}
+function _footnote(txt){ return `<p style="font-size:10px;color:var(--muted);margin-top:10px;line-height:1.5;max-width:560px">${txt}</p>`; }
+
+// ── per-section renderers ──
+function _renderDb(d){
+  const eng = _cfgState.engine || d.db_engine || 'django.db.backends.postgresql';
+  const isSqlite = eng.includes('sqlite');
+  let fields = _f('Engine', _select('cf-db_engine', eng, Object.entries(DB_ENGINES), 'onDbEngineChange()'));
+  if(isSqlite){
+    fields += _f('Database File', _input('db_name', d.db_name, 'db.sqlite3'));
+  } else {
+    fields += `<div style="display:flex;gap:10px">`+
+      _f('Database Name', _input('db_name', d.db_name, 'neomonks_core'), '', 'flex:2')+
+      _f('Port', _input('db_port', d.db_port, '5432'), '', 'flex:1')+
+      `</div>`;
+    fields += _f('Host', _input('db_host', d.db_host, 'localhost'));
+    fields += `<div style="display:flex;gap:10px">`+
+      _f('User', _input('db_user', d.db_user, 'neomonks'), '', 'flex:1')+
+      _f('Password', _secret('db_password'), _hintHtml(d.db_password_set, d.db_password_masked), 'flex:1')+
+      `</div>`;
+  }
+  return _detailShell('🗄️ Database Connection',
+    'Connection parameters for the platform database. Changing the live database requires updating environment variables and restarting the server — values here are saved for reference and connection testing.',
+    fields, 'db')
+    + _footnote('Tip: use “Test Connection” to verify credentials before saving.');
+}
+
+function _renderLlm(d){
+  const sel = _cfgState.provider || (d.llm_mode==='LOCAL' ? 'OLLAMA' : (d.llm_provider||'OPENAI'));
+  const meta = LLM_PROVIDERS[sel] || LLM_PROVIDERS.OPENAI;
+  const provOpts = Object.entries(LLM_PROVIDERS).map(([k,v])=>[k,v.label]);
+  let fields = _f('Provider', _select('cf-llm_provider_sel', sel, provOpts, 'onLlmProviderChange()'));
+
+  if(meta.mode==='LOCAL'){
+    fields += _f('Ollama Host', _input('ollama_host', d.ollama_host, 'http://localhost:11434'));
+    fields += _f('Model', _input('ollama_model', d.ollama_model, meta.model));
+    fields += _f('Models Path', _input('ollama_models_path', d.ollama_models_path, 'E:\\neomonks_tech\\models'));
+  } else {
+    const isStored = d.llm_mode==='ONLINE' && d.llm_provider===sel;
+    fields += _f('API Key', _secret('llm_api_key'),
+      isStored ? _hintHtml(d.llm_api_key_set, d.llm_api_key_masked) : _hintHtml(false,''));
+    fields += _f('Model', _input('llm_model', isStored ? d.llm_model : '', meta.model));
+  }
+  const desc = meta.mode==='LOCAL'
+    ? 'Run models locally through Ollama — no API key required. Set the host, the default model and (optionally) where model files are stored.'
+    : `Use the hosted ${meta.label} API. Provide an API key and the model name to call.`;
+  return _detailShell('🤖 LLM Connection', desc, fields, 'llm');
+}
+
+function _renderGithub(d){
+  let fields = _f('Personal Access Token', _secret('github_token'),
+    _hintHtml(d.github_token_set, d.github_token_masked));
+  fields += _f('Repository', _input('github_repo', d.github_repo, 'org/repo'));
+  fields += _f('Base Branch', _input('github_base_branch', d.github_base_branch, 'main'));
+  return _detailShell('🐙 GitHub Connection',
+    'Credentials used to push branches and open pull requests. The token needs repo scope. Test Connection verifies the token and, if a repository is set, that it is accessible.',
+    fields, 'github');
+}
+
+function renderConfigDetail(){
+  const d=_cfgState.data;
+  const pane=document.getElementById('cfg-detail');
+  if(!pane) return;
+  if(_cfgState.active==='llm')        pane.innerHTML=_renderLlm(d);
+  else if(_cfgState.active==='github')pane.innerHTML=_renderGithub(d);
+  else                                pane.innerHTML=_renderDb(d);
+}
+
+function renderConfigNav(){
+  const d=_cfgState.data;
+  const dbSub  = DB_ENGINES[d.db_engine] || '—';
+  const llmSub = d.llm_mode==='LOCAL' ? 'Ollama (Local)' : (LLM_PROVIDERS[d.llm_provider]?.label || d.llm_provider || '—');
+  const ghSub  = d.github_repo || 'not configured';
+  const items=[
+    ['db','🗄️','Database', dbSub],
+    ['llm','🤖','LLM',      llmSub],
+    ['github','🐙','GitHub', ghSub],
+  ];
+  const nav=document.getElementById('cfg-nav');
+  if(!nav) return;
+  nav.innerHTML=items.map(([k,ic,title,sub])=>`
+    <div class="cfg-nav-item ${_cfgState.active===k?'on':''}" onclick="setConfigSection('${k}')">
+      <span class="cfg-nav-ic">${ic}</span>
+      <div><div class="cfg-nav-title">${title}</div><div class="cfg-nav-sub">${esc(sub)}</div></div>
+    </div>`).join('');
+}
+
+function setConfigSection(k){
+  _cfgState.active=k;
+  _cfgState.provider=null; _cfgState.engine=null;
+  renderConfigNav(); renderConfigDetail();
+}
+function onLlmProviderChange(){
+  _cfgState.provider=document.getElementById('cf-llm_provider_sel').value;
+  renderConfigDetail();
+}
+function onDbEngineChange(){
+  _cfgState.engine=document.getElementById('cf-db_engine').value;
+  renderConfigDetail();
+}
+
+async function loadConfig(){
+  const r=await fetch('/api/v1/realtime/config/');
+  if(!r.ok){ toast('Failed to load configuration','err'); return; }
+  _cfgState.data=await r.json();
+  _cfgState.provider=null; _cfgState.engine=null;
+  renderConfigNav(); renderConfigDetail();
+  _configLoaded=true;
+}
+
+function _gv(key){ const el=document.getElementById('cf-'+key); return el?el.value.trim():''; }
+
+function _configPayload(section){
+  if(section==='db'){
+    const eng=_gv('db_engine');
+    const p={ db_engine:eng, db_name:_gv('db_name') };
+    if(!eng.includes('sqlite')){
+      p.db_host=_gv('db_host'); p.db_port=_gv('db_port');
+      p.db_user=_gv('db_user'); p.db_password=_gv('db_password');
+    }
+    return p;
+  }
+  if(section==='llm'){
+    const prov=document.getElementById('cf-llm_provider_sel').value;
+    const meta=LLM_PROVIDERS[prov]||LLM_PROVIDERS.OPENAI;
+    if(meta.mode==='LOCAL') return {
+      llm_mode:'LOCAL', ollama_host:_gv('ollama_host'),
+      ollama_model:_gv('ollama_model'), ollama_models_path:_gv('ollama_models_path'),
+    };
+    return { llm_mode:'ONLINE', llm_provider:prov, llm_api_key:_gv('llm_api_key'), llm_model:_gv('llm_model') };
+  }
+  if(section==='github') return {
+    github_token:_gv('github_token'), github_repo:_gv('github_repo'), github_base_branch:_gv('github_base_branch'),
+  };
+  return {};
+}
+
+function _cfgResp(msg, ok){
+  const el=document.getElementById('cfg-resp');
+  if(el){ el.textContent=msg; el.style.color=ok?'var(--ok)':'var(--err)'; }
+}
+
+async function saveConfig(section){
+  _cfgResp('Saving…',true);
+  const {ok,data}=await api('POST','/api/v1/realtime/config/save/',_configPayload(section));
+  if(ok){
+    _cfgState.data=data;
+    _cfgState.provider=null; _cfgState.engine=null;
+    renderConfigNav(); renderConfigDetail();
+    _cfgResp('Saved.',true); toast('Configuration saved');
+  } else {
+    _cfgResp('Save failed: '+JSON.stringify(data),false);
+  }
+}
+
+async function testConfig(section){
+  _cfgResp('Testing connection…',true);
+  const {ok,data}=await api('POST',`/api/v1/realtime/config/test-${section}/`,_configPayload(section));
+  _cfgResp((data&&data.message)||(ok?'OK':'Failed'), !!(data&&data.ok));
+}
+
+// load config when the tab is first opened
+document.querySelectorAll('.tab').forEach(t=>{
+  t.addEventListener('click', ()=>{
+    if(t.dataset.pg==='config' && !_configLoaded) loadConfig();
+  });
+});
 
 // ── modal helpers ──────────────────────────────────────────────────────────
 function openModal(html){
