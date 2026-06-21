@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from functools import wraps
+
+from django.contrib.auth.decorators import login_required
 from django.http import HttpRequest, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET
@@ -7,11 +10,26 @@ from django.views.decorators.http import require_GET
 from .stream import stream_events
 
 
+def login_required_json(view):
+    """Like login_required, but returns 403 JSON instead of redirecting.
+
+    Suitable for the realtime JSON/SSE endpoints called from the dashboard via
+    fetch/EventSource (which use the tenant session cookie).
+    """
+    @wraps(view)
+    def _wrapped(request: HttpRequest, *args, **kwargs):
+        if not request.user.is_authenticated:
+            return JsonResponse({"detail": "Authentication required."}, status=403)
+        return view(request, *args, **kwargs)
+    return _wrapped
+
+
 @require_GET
 def health(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"status": "ok", "app": "realtime"})
 
 
+@login_required_json
 @require_GET
 def ollama_status(request: HttpRequest) -> JsonResponse:
     """GET /api/v1/realtime/ollama-status/"""
@@ -66,6 +84,7 @@ def ollama_status(request: HttpRequest) -> JsonResponse:
 
 from django.views.decorators.http import require_POST
 
+@login_required_json
 @require_POST
 def ollama_start(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/ollama-start/
@@ -113,6 +132,7 @@ def ollama_start(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"started": False, "message": str(e)}, status=500)
 
 
+@login_required
 @require_GET
 def pr_review(request: HttpRequest, task_id: int):
     """GET /api/v1/realtime/pr-review/{task_id}/
@@ -150,6 +170,7 @@ def pr_review(request: HttpRequest, task_id: int):
     })
 
 
+@login_required_json
 @require_GET
 def loop_status(request: HttpRequest) -> JsonResponse:
     """GET /api/v1/realtime/loop-status/
@@ -189,6 +210,7 @@ def loop_status(request: HttpRequest) -> JsonResponse:
     return JsonResponse(status)
 
 
+@login_required_json
 @require_GET
 def requirement_file(request: HttpRequest, req_id: int) -> JsonResponse:
     """GET /api/v1/realtime/requirement-file/{req_id}/
@@ -232,6 +254,7 @@ def requirement_file(request: HttpRequest, req_id: int) -> JsonResponse:
 
 from django.views.decorators.http import require_POST as _require_POST
 
+@login_required_json
 @_require_POST
 def requirement_file_save(request: HttpRequest, req_id: int) -> JsonResponse:
     """POST /api/v1/realtime/requirement-file/{req_id}/save/
@@ -310,6 +333,7 @@ def _config_to_dict(cfg) -> dict:
     }
 
 
+@login_required_json
 @require_GET
 def config_get(request: HttpRequest) -> JsonResponse:
     """GET /api/v1/realtime/config/ — current platform configuration (secrets masked)."""
@@ -319,6 +343,7 @@ def config_get(request: HttpRequest) -> JsonResponse:
     return JsonResponse(_config_to_dict(cfg))
 
 
+@login_required_json
 @require_POST
 def config_save(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/ — persist platform configuration.
@@ -362,6 +387,7 @@ def _resolved_secret(body_value, stored_value) -> str:
     return val if val else stored_value
 
 
+@login_required_json
 @require_POST
 def config_test_db(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/test-db/ — try a psycopg connection with given params."""
@@ -399,6 +425,7 @@ def config_test_db(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "message": str(e)}, status=400)
 
 
+@login_required_json
 @require_POST
 def config_test_llm(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/test-llm/ — verify LLM connectivity (online or local)."""
@@ -456,6 +483,7 @@ def config_test_llm(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "message": str(e)}, status=400)
 
 
+@login_required_json
 @require_POST
 def config_test_github(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/test-github/ — validate token and repo access."""
@@ -494,6 +522,7 @@ def config_test_github(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "message": str(e)}, status=400)
 
 
+@login_required_json
 @require_GET
 def event_stream(request: HttpRequest) -> StreamingHttpResponse:
     since_id = int(request.GET.get("since", 0))
@@ -506,6 +535,7 @@ def event_stream(request: HttpRequest) -> StreamingHttpResponse:
     return response
 
 
+@login_required
 @require_GET
 def dashboard(request: HttpRequest):
     return render(request, "dashboard.html")

@@ -69,13 +69,16 @@ SaaS, subdomain-per-tenant, SSO (Azure AD) + email/password, seat packages +
 pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md).
 
 - [x] Design doc written (schema-per-tenant via django-tenants)
-- [~] **3a** Tenancy core: `apps.tenancy` (Organization/Domain), `apps.accounts`
+- [x] **3a** Tenancy core: `apps.tenancy` (Organization/Domain), `apps.accounts`
       custom email `User`, SHARED/TENANT split, `TenantMainMiddleware`, router.
-      **Validated on a fresh DB** (schema auto-creation, cross-tenant isolation,
-      subdomain→schema routing all pass). **Live DB cutover pending** (gated —
-      destructive; backup taken in `backup_workflow_pre_tenants.json`)
-- [ ] **3b** Authn: email/password scoped to org, sessions, password reset,
-      API keys; flip DRF default to `IsAuthenticated`
+      Validated (schema auto-creation, cross-tenant isolation, subdomain routing).
+      **Live DB cut over**: `public` control-plane + `demo` tenant (demo.localhost)
+      with 14 seeded agents + an owner user.
+- [x] **3b** Authn: email/password login scoped per tenant (`/login/`,
+      `/logout/`), sessions, `/api/v1/auth/me/`, change-password, hashed API keys
+      (`Api-Key` header auth + management endpoints). DRF default flipped to
+      `IsAuthenticated`; realtime/dashboard endpoints gated. Verified end-to-end.
+      _(Password-reset-via-email deferred — needs SMTP config.)_
 - [ ] **3c** Org-scope every domain model + enforced querysets + cross-tenant
       isolation tests; `PlatformConfiguration` becomes per-org
 - [ ] **3d** RBAC: Owner/Admin/Member/Viewer + `HasOrgRole`; user management

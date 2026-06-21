@@ -99,6 +99,10 @@ TENANT_DOMAIN_MODEL = 'tenancy.Domain'
 # Per-tenant users (each tenant schema has its own user table).
 AUTH_USER_MODEL = 'accounts.User'
 
+# Where @login_required sends unauthenticated users, and where login returns to.
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/api/v1/realtime/dashboard/'
+
 MIDDLEWARE = [
     # Must be first: resolves the tenant schema from the request host.
     'django_tenants.middleware.main.TenantMainMiddleware',
@@ -249,9 +253,10 @@ REST_FRAMEWORK = {
         'rest_framework.filters.OrderingFilter',
     ],
     'DEFAULT_AUTHENTICATION_CLASSES': [
+        'apps.accounts.authentication.ApiKeyAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
     'DEFAULT_PERMISSION_CLASSES': [
-        'rest_framework.permissions.AllowAny',
+        'rest_framework.permissions.IsAuthenticated',
     ],
 }

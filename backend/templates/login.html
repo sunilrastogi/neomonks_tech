@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign in — NeoMonks</title>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{--bg:#0d0f18;--surface:#141622;--border:#252840;--accent:#6366f1;
+      --text:#e2e8f0;--muted:#64748b;--err:#ef4444}
+    body{background:var(--bg);color:var(--text);font-family:'Inter',system-ui,sans-serif;
+      height:100vh;display:flex;align-items:center;justify-content:center}
+    .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+      padding:32px;width:100%;max-width:360px;box-shadow:0 16px 48px rgba(0,0,0,.5)}
+    .logo{font-weight:800;font-size:20px;color:var(--accent);text-align:center}
+    .tag{font-size:12px;color:var(--muted);text-align:center;margin:4px 0 22px}
+    label{font-size:11px;color:var(--muted);display:block;margin:0 0 5px}
+    input{width:100%;background:var(--bg);border:1px solid var(--border);color:var(--text);
+      border-radius:8px;padding:10px 12px;font-size:14px;outline:none;margin-bottom:14px}
+    input:focus{border-color:var(--accent)}
+    button{width:100%;background:var(--accent);color:#fff;border:none;border-radius:8px;
+      padding:11px;font-size:14px;font-weight:600;cursor:pointer}
+    button:hover{opacity:.9}
+    .err{background:rgba(239,68,68,.1);border:1px solid var(--err);color:var(--err);
+      border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:16px}
+  </style>
+</head>
+<body>
+  <form class="card" method="post" action="">
+    {% csrf_token %}
+    <div class="logo">NeoMonks</div>
+    <div class="tag">Sign in to your workspace</div>
+    {% if error %}<div class="err">{{ error }}</div>{% endif %}
+    <label for="email">Email</label>
+    <input id="email" name="email" type="email" autocomplete="username" required autofocus />
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required />
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>

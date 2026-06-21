@@ -3,9 +3,13 @@
 `apps.accounts` is a TENANT app, so each tenant schema gets its own user table —
 email is therefore unique *within a tenant*, which matches one-org-per-user.
 """
+import hashlib
+import secrets
+
 from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.db import models
 from django.db.models import TextChoices
+from django.utils import timezone
 
 
 class Role(TextChoices):
@@ -62,3 +66,60 @@ class User(AbstractUser):
 
     def __str__(self):
         return self.email
+
+
+def _hash_key(raw: str) -> str:
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+class ApiKey(models.Model):
+    """Programmatic access token for a tenant. Only the hash is stored.
+
+    The full key (``nmk_<prefix>_<secret>``) is shown once at creation time.
+    Lives in the tenant schema, so a key only ever grants access to its own org.
+    """
+
+    name = models.CharField(max_length=255)
+    prefix = models.CharField(max_length=12, unique=True, db_index=True)
+    hashed_key = models.CharField(max_length=64)
+    created_by = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    revoked = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.prefix}…)"
+
+    @classmethod
+    def generate(cls, name: str, created_by: str = ""):
+        """Create a key; returns (instance, full_plaintext_key)."""
+        prefix = secrets.token_hex(4)          # 8 hex chars
+        secret = secrets.token_urlsafe(32)
+        full = f"nmk_{prefix}_{secret}"
+        obj = cls.objects.create(
+            name=name, prefix=prefix, hashed_key=_hash_key(full), created_by=created_by,
+        )
+        return obj, full
+
+    @classmethod
+    def resolve(cls, raw: str):
+        """Return the live ApiKey for a presented raw key, or None."""
+        if not raw or not raw.startswith("nmk_"):
+            return None
+        parts = raw.split("_", 2)
+        if len(parts) != 3:
+            return None
+        try:
+            obj = cls.objects.get(prefix=parts[1], revoked=False)
+        except cls.DoesNotExist:
+            return None
+        if secrets.compare_digest(obj.hashed_key, _hash_key(raw)):
+            return obj
+        return None
+
+    def touch(self):
+        self.last_used_at = timezone.now()
+        self.save(update_fields=["last_used_at"])

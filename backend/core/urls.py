@@ -18,8 +18,13 @@ from django.contrib import admin
 from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from django.urls import include, path
 
+from apps.accounts.urls import api_urlpatterns as accounts_api
+from apps.accounts.urls import page_urlpatterns as accounts_pages
+
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/workflow/', include('apps.workflow.api.urls')),
     path('api/v1/realtime/', include('apps.realtime.urls')),
+    path('api/v1/auth/', include((accounts_api, 'accounts'))),
+    *accounts_pages,
 ] + staticfiles_urlpatterns()
