@@ -16,3 +16,9 @@ gitpython>=3.1
 
 # HTTP client (GitHub API, PR sync)
 requests>=2.32
+
+# Environment configuration (.env loading)
+python-dotenv>=1.0
+
+# Secret encryption at rest (PlatformConfiguration)
+cryptography>=42.0

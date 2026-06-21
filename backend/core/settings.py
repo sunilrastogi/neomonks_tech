@@ -13,20 +13,45 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+from dotenv import load_dotenv
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load environment variables from the project-root .env (one level above backend/).
+# Real environment variables always win over .env values.
+load_dotenv(BASE_DIR.parent / ".env")
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-##4z$@nvumsvy__$-8lh0e9@9e36)$r&mhk!ut(--do5q_=(m#'
+def env_bool(key: str, default: bool = False) -> bool:
+    """Parse a boolean environment variable ('1/true/yes/on')."""
+    return os.environ.get(key, str(default)).strip().lower() in ("1", "true", "yes", "on")
+
+
+def env_list(key: str, default: str = "") -> list[str]:
+    """Parse a comma-separated environment variable into a list."""
+    return [item.strip() for item in os.environ.get(key, default).split(",") if item.strip()]
+
+
+# Insecure default kept ONLY for local development convenience. It is rejected
+# below when DEBUG is off so it can never silently reach production.
+_INSECURE_SECRET_KEY = "django-insecure-##4z$@nvumsvy__$-8lh0e9@9e36)$r&mhk!ut(--do5q_=(m#"
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env_bool("DJANGO_DEBUG", False)
 
-ALLOWED_HOSTS = []
+# SECURITY WARNING: keep the secret key used in production secret!
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY") or _INSECURE_SECRET_KEY
+if not DEBUG and SECRET_KEY == _INSECURE_SECRET_KEY:
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be set to a unique secret value when DEBUG is off. "
+        "Generate one with: python -c \"from django.core.management.utils import "
+        "get_random_secret_key; print(get_random_secret_key())\""
+    )
+
+ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
+CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
 
 
 # Application definition
@@ -134,6 +159,20 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ── Production security headers (opt-in via DJANGO_SECURE=True behind HTTPS) ────
+# Enable once the platform is served over TLS so dev (plain HTTP) is unaffected.
+SECURE = env_bool("DJANGO_SECURE", False)
+if SECURE:
+    SECURE_SSL_REDIRECT = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    # Honour the proxy's X-Forwarded-Proto so SSL redirect works behind a load balancer.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 # ── Autonomous workflow settings ──────────────────────────────────────────────
 
