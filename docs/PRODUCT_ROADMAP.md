@@ -38,7 +38,7 @@ Small, removes active liabilities, no new product surface.
       (it was never committed, but treat any key that has left the machine as
       compromised).
 
-## Checkpoint 2 — Encrypt secrets at rest  `[~]`
+## Checkpoint 2 — Encrypt secrets at rest  `[x]`
 
 `PlatformConfiguration` stores API keys / DB password / GitHub token in
 plaintext columns. Encrypt them at rest.
@@ -50,8 +50,8 @@ plaintext columns. Encrypt them at rest.
       (`EncryptedCharField` in `apps/workflow/fields.py`); legacy plaintext rows
       stay readable and re-encrypt on next save
 - [x] Migration written to encrypt existing rows (migration `0005`)
-- [ ] **Apply migration `0005`** — blocked: local Postgres was down at the time;
-      run once the DB server is up
+- [x] **Applied migration `0005`** — existing row encrypted; verified live that
+      the DB column holds ciphertext while ORM reads return plaintext
 - [x] Never log decrypted secrets; masked read API unchanged
       (`github_token_masked` etc. still only expose the last 4 chars)
 - [x] Key rotation story: rotating `CONFIG_ENCRYPTION_KEY` invalidates stored
