@@ -24,6 +24,22 @@ def login_required_json(view):
     return _wrapped
 
 
+def admin_required_json(view):
+    """Require an authenticated ADMIN/OWNER; returns 403 JSON otherwise.
+
+    Used for sensitive controls (connection config, restarting Ollama).
+    """
+    @wraps(view)
+    def _wrapped(request: HttpRequest, *args, **kwargs):
+        user = request.user
+        if not user.is_authenticated:
+            return JsonResponse({"detail": "Authentication required."}, status=403)
+        if getattr(user, "role", None) not in ("ADMIN", "OWNER"):
+            return JsonResponse({"detail": "Admin role required."}, status=403)
+        return view(request, *args, **kwargs)
+    return _wrapped
+
+
 @require_GET
 def health(request: HttpRequest) -> JsonResponse:
     return JsonResponse({"status": "ok", "app": "realtime"})
@@ -84,7 +100,7 @@ def ollama_status(request: HttpRequest) -> JsonResponse:
 
 from django.views.decorators.http import require_POST
 
-@login_required_json
+@admin_required_json
 @require_POST
 def ollama_start(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/ollama-start/
@@ -333,7 +349,7 @@ def _config_to_dict(cfg) -> dict:
     }
 
 
-@login_required_json
+@admin_required_json
 @require_GET
 def config_get(request: HttpRequest) -> JsonResponse:
     """GET /api/v1/realtime/config/ — current platform configuration (secrets masked)."""
@@ -343,7 +359,7 @@ def config_get(request: HttpRequest) -> JsonResponse:
     return JsonResponse(_config_to_dict(cfg))
 
 
-@login_required_json
+@admin_required_json
 @require_POST
 def config_save(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/ — persist platform configuration.
@@ -387,7 +403,7 @@ def _resolved_secret(body_value, stored_value) -> str:
     return val if val else stored_value
 
 
-@login_required_json
+@admin_required_json
 @require_POST
 def config_test_db(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/test-db/ — try a psycopg connection with given params."""
@@ -425,7 +441,7 @@ def config_test_db(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "message": str(e)}, status=400)
 
 
-@login_required_json
+@admin_required_json
 @require_POST
 def config_test_llm(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/test-llm/ — verify LLM connectivity (online or local)."""
@@ -483,7 +499,7 @@ def config_test_llm(request: HttpRequest) -> JsonResponse:
         return JsonResponse({"ok": False, "message": str(e)}, status=400)
 
 
-@login_required_json
+@admin_required_json
 @require_POST
 def config_test_github(request: HttpRequest) -> JsonResponse:
     """POST /api/v1/realtime/config/test-github/ — validate token and repo access."""

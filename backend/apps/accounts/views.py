@@ -6,12 +6,14 @@ authentication, users and API keys are automatically tenant-scoped.
 from django.contrib.auth import authenticate, login, logout
 from django.shortcuts import redirect, render
 from rest_framework import status, viewsets
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from apps.accounts.models import ApiKey
-from apps.accounts.serializers import ApiKeySerializer, UserSerializer
+from apps.accounts.models import ApiKey, Role, User
+from apps.accounts.permissions import IsOrgAdmin
+from apps.accounts.serializers import ApiKeySerializer, UserAdminSerializer, UserSerializer
 
 DASHBOARD_URL = "/api/v1/realtime/dashboard/"
 
@@ -59,11 +61,45 @@ class ChangePasswordView(APIView):
         return Response({"detail": "Password changed. Please sign in again."})
 
 
+class UserAdminViewSet(viewsets.ModelViewSet):
+    """Admin-only management of users within the current tenant."""
+
+    serializer_class = UserAdminSerializer
+    permission_classes = [IsOrgAdmin]
+    http_method_names = ["get", "post", "patch", "delete"]
+
+    def get_queryset(self):
+        return User.objects.all().order_by("email")
+
+    def _guard_owner_role(self, serializer):
+        # Only an Owner may grant the Owner role.
+        if serializer.validated_data.get("role") == Role.OWNER and self.request.user.role != Role.OWNER:
+            raise PermissionDenied("Only an Owner can assign the Owner role.")
+
+    def perform_create(self, serializer):
+        self._guard_owner_role(serializer)
+        serializer.save()
+
+    def perform_update(self, serializer):
+        self._guard_owner_role(serializer)
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        """Deactivate rather than hard-delete; you cannot deactivate yourself."""
+        user = self.get_object()
+        if user.pk == request.user.pk:
+            return Response({"detail": "You cannot deactivate your own account."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        user.is_active = False
+        user.save(update_fields=["is_active"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class ApiKeyViewSet(viewsets.ModelViewSet):
-    """Manage tenant API keys. The full key is returned only once, on create."""
+    """Manage tenant API keys (admin only). The full key is returned once, on create."""
 
     serializer_class = ApiKeySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsOrgAdmin]
     http_method_names = ["get", "post", "delete"]
 
     def get_queryset(self):

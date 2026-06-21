@@ -85,7 +85,11 @@ pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md)
       keys schema-qualified. Automated isolation tests (4) pass: product + user
       isolation, per-tenant `PlatformConfiguration`, `submit` schema preservation.
       _(No org columns needed — schema is the boundary.)_
-- [ ] **3d** RBAC: Owner/Admin/Member/Viewer + `HasOrgRole`; user management
+- [x] **3d** RBAC: Owner/Admin/Member/Viewer hierarchy. `WorkflowRolePermission`
+      (read=Viewer+, write=Member+, delete=Admin+) as DRF default; `IsOrgAdmin`
+      gates API-key + user management and the realtime config/Ollama endpoints.
+      Admin user-management endpoints (`/api/v1/auth/users/`, create/list/update/
+      deactivate; only Owner grants Owner). 6 RBAC tests pass.
 - [ ] **3e** SSO (Azure AD / OIDC) per-org via Authlib + JIT provisioning
 - [ ] **3f** Billing: Stripe seat packages + enforcement + PAYG metering + webhooks
 
