@@ -7,6 +7,8 @@ from django.utils import timezone
 from django.db.models import TextChoices
 import json
 
+from apps.workflow.fields import EncryptedCharField
+
 
 class RequirementStatus(TextChoices):
     """Requirement state transitions: RECEIVED -> UNDER_REVIEW -> APPROVED -> REJECTED"""
@@ -493,7 +495,7 @@ class PlatformConfiguration(models.Model):
     db_engine = models.CharField(max_length=255, blank=True, default="django.db.backends.postgresql")
     db_name = models.CharField(max_length=255, blank=True, default="")
     db_user = models.CharField(max_length=255, blank=True, default="")
-    db_password = models.CharField(max_length=255, blank=True, default="")
+    db_password = EncryptedCharField(max_length=1024, blank=True, default="")
     db_host = models.CharField(max_length=255, blank=True, default="")
     db_port = models.CharField(max_length=10, blank=True, default="")
 
@@ -501,7 +503,7 @@ class PlatformConfiguration(models.Model):
     llm_mode = models.CharField(max_length=20, choices=LLMMode.choices, default=LLMMode.LOCAL)
     # Online provider settings
     llm_provider = models.CharField(max_length=20, choices=LLMProvider.choices, blank=True, default=LLMProvider.OPENAI)
-    llm_api_key = models.CharField(max_length=255, blank=True, default="")
+    llm_api_key = EncryptedCharField(max_length=1024, blank=True, default="")
     llm_model = models.CharField(max_length=255, blank=True, default="")
     # Local (Ollama) settings
     ollama_host = models.CharField(max_length=255, blank=True, default="")
@@ -509,7 +511,7 @@ class PlatformConfiguration(models.Model):
     ollama_models_path = models.CharField(max_length=500, blank=True, default="")
 
     # ── GitHub ────────────────────────────────────────────────────────────
-    github_token = models.CharField(max_length=255, blank=True, default="")
+    github_token = EncryptedCharField(max_length=1024, blank=True, default="")
     github_repo = models.CharField(max_length=255, blank=True, default="")
     github_base_branch = models.CharField(max_length=255, blank=True, default="main")
 

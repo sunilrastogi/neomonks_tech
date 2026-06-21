@@ -38,17 +38,30 @@ Small, removes active liabilities, no new product surface.
       (it was never committed, but treat any key that has left the machine as
       compromised).
 
-## Checkpoint 2 — Encrypt secrets at rest  `[ ]`
+## Checkpoint 2 — Encrypt secrets at rest  `[~]`
 
 `PlatformConfiguration` stores API keys / DB password / GitHub token in
 plaintext columns. Encrypt them at rest.
 
-- [ ] Symmetric encryption (Fernet via `cryptography`) keyed by
-      `CONFIG_ENCRYPTION_KEY` from env / secret manager
-- [ ] Transparent encrypt-on-write / decrypt-on-read for secret fields
-- [ ] Migration to encrypt existing rows
-- [ ] Never log decrypted secrets; keep the masked read API
-- [ ] Key rotation story documented
+- [x] Symmetric encryption (Fernet via `cryptography`) keyed by
+      `CONFIG_ENCRYPTION_KEY` from env (`apps/workflow/crypto.py`); derived from
+      `SECRET_KEY` in DEBUG, required explicitly in production
+- [x] Transparent encrypt-on-write / decrypt-on-read field
+      (`EncryptedCharField` in `apps/workflow/fields.py`); legacy plaintext rows
+      stay readable and re-encrypt on next save
+- [x] Migration written to encrypt existing rows (migration `0005`)
+- [ ] **Apply migration `0005`** — blocked: local Postgres was down at the time;
+      run once the DB server is up
+- [x] Never log decrypted secrets; masked read API unchanged
+      (`github_token_masked` etc. still only expose the last 4 chars)
+- [x] Key rotation story: rotating `CONFIG_ENCRYPTION_KEY` invalidates stored
+      ciphertext; `decrypt_secret` fails safe to empty so the app keeps running,
+      then re-enter secrets in the Configurations tab to re-encrypt with the new key
+
+> Encryption logic verified without the DB: round-trip, no double-encrypt,
+> legacy-plaintext passthrough, field encrypt/decrypt, 200-char key fits in 1024,
+> and masking still hides the raw secret. Only the live `migrate` apply + DB
+> round-trip remain.
 
 ## Checkpoint 3 — Auth, RBAC & multi-tenancy  `[ ]`
 

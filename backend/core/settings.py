@@ -53,6 +53,18 @@ if not DEBUG and SECRET_KEY == _INSECURE_SECRET_KEY:
 ALLOWED_HOSTS = env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 CSRF_TRUSTED_ORIGINS = env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
 
+# Fernet key used to encrypt stored connection secrets at rest. In production it
+# must be set explicitly; in DEBUG it is derived from SECRET_KEY for convenience.
+# Generate one with:
+#   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+CONFIG_ENCRYPTION_KEY = os.environ.get("CONFIG_ENCRYPTION_KEY", "")
+if not DEBUG and not CONFIG_ENCRYPTION_KEY:
+    raise ImproperlyConfigured(
+        "CONFIG_ENCRYPTION_KEY must be set when DEBUG is off so stored secrets "
+        "can be encrypted at rest. Generate one with: python -c \"from "
+        "cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+    )
+
 
 # Application definition
 
