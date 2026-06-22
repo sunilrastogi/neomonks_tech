@@ -78,7 +78,8 @@ pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md)
       `/logout/`), sessions, `/api/v1/auth/me/`, change-password, hashed API keys
       (`Api-Key` header auth + management endpoints). DRF default flipped to
       `IsAuthenticated`; realtime/dashboard endpoints gated. Verified end-to-end.
-      _(Password-reset-via-email deferred — needs SMTP config.)_
+      Password reset via email implemented (request + confirm API, reset page,
+      env-driven email backend — console in dev, SMTP in prod once configured).
 - [x] **3c** Tenant-context for background work: `submit()` captures the caller's
       schema and re-enters it in the worker; standalone loop iterates all tenants
       (`iterate_all_tenants`, `run_loop --schema`); executor semaphore + planner
@@ -90,8 +91,11 @@ pay-as-you-go. Full design in [`AUTH_TENANCY_DESIGN.md`](AUTH_TENANCY_DESIGN.md)
       gates API-key + user management and the realtime config/Ollama endpoints.
       Admin user-management endpoints (`/api/v1/auth/users/`, create/list/update/
       deactivate; only Owner grants Owner). 6 RBAC tests pass.
-- [ ] **3e** SSO (Azure AD / OIDC) per-org via Authlib + JIT provisioning
-      _(deferred — needs an Azure app registration for live verification)_
+- [x] **3e** SSO (Azure AD / OIDC) per-tenant: `OrgSSOConfig` (encrypted secret),
+      authorization-code flow (`/sso/login/` + `/sso/callback/`) over discovery →
+      token → userinfo, JIT provisioning with domain allow-list + default role,
+      admin config API, "Sign in with SSO" on the login page. 6 SSO tests pass.
+      _Live Azure verification still pending your app registration (creds only)._
 - [x] **3f** Billing: shared `apps.billing` (`Subscription` + `UsageRecord` keyed
       by Organization). Seat packages + enforcement on user creation (HTTP 402
       when full); pay-as-you-go usage metering (AGENT_RUN recorded by the executor);

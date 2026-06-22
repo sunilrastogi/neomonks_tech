@@ -11,6 +11,8 @@ from django.db import models
 from django.db.models import TextChoices
 from django.utils import timezone
 
+from apps.workflow.fields import EncryptedCharField
+
 
 class Role(TextChoices):
     OWNER = "OWNER", "Owner"      # billing + everything
@@ -123,3 +125,46 @@ class ApiKey(models.Model):
     def touch(self):
         self.last_used_at = timezone.now()
         self.save(update_fields=["last_used_at"])
+
+
+class SSOProvider(TextChoices):
+    AZURE_AD = "AZURE_AD", "Microsoft Entra ID (Azure AD)"
+    GENERIC_OIDC = "GENERIC_OIDC", "Generic OIDC"
+
+
+class OrgSSOConfig(models.Model):
+    """Per-tenant OIDC single sign-on configuration (singleton per schema)."""
+
+    enabled = models.BooleanField(default=False)
+    provider = models.CharField(max_length=20, choices=SSOProvider.choices, default=SSOProvider.AZURE_AD)
+    # The IdP's OpenID discovery document URL, e.g. for Azure:
+    # https://login.microsoftonline.com/<tenant-id>/v2.0/.well-known/openid-configuration
+    discovery_url = models.CharField(max_length=500, blank=True, default="")
+    client_id = models.CharField(max_length=255, blank=True, default="")
+    client_secret = EncryptedCharField(max_length=1024, blank=True, default="")
+    allowed_email_domains = models.CharField(
+        max_length=500, blank=True, default="",
+        help_text="Comma-separated; empty allows any domain.",
+    )
+    default_role = models.CharField(max_length=20, choices=Role.choices, default=Role.MEMBER)
+    auto_provision = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "SSO configuration"
+        verbose_name_plural = "SSO configuration"
+
+    def __str__(self):
+        return f"SSO ({self.provider}, {'on' if self.enabled else 'off'})"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1  # singleton per tenant schema
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def load(cls) -> "OrgSSOConfig":
+        obj, _ = cls.objects.get_or_create(pk=1)
+        return obj
+
+    def allowed_domains_list(self) -> list[str]:
+        return [d.strip().lower() for d in self.allowed_email_domains.split(",") if d.strip()]

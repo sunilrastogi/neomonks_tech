@@ -23,6 +23,11 @@
     button:hover{opacity:.9}
     .err{background:rgba(239,68,68,.1);border:1px solid var(--err);color:var(--err);
       border-radius:8px;padding:9px 12px;font-size:12px;margin-bottom:16px}
+    .sso{display:block;text-align:center;margin-top:12px;padding:10px;border:1px solid var(--border);
+      border-radius:8px;color:var(--text);text-decoration:none;font-size:13px;font-weight:600}
+    .sso:hover{border-color:var(--accent)}
+    .muted-link{display:block;text-align:center;margin-top:14px;color:var(--muted);font-size:12px;text-decoration:none}
+    .muted-link:hover{color:var(--text)}
   </style>
 </head>
 <body>
@@ -36,6 +41,10 @@
     <label for="password">Password</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required />
     <button type="submit">Sign in</button>
+    {% if sso_enabled %}
+    <a href="/sso/login/" class="sso">Sign in with SSO</a>
+    {% endif %}
+    <a href="/reset-password/" class="muted-link">Forgot password?</a>
   </form>
 </body>
 </html>

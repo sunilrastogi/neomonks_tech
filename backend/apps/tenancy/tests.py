@@ -3,12 +3,17 @@
 Run with the django-tenants test runner (configured via TEST_RUNNER):
     python manage.py test apps.tenancy
 """
-from django.test import override_settings
+import re
+from unittest.mock import patch
+
+from django.core import mail
+from django.test import Client, override_settings
 from django_tenants.test.cases import TenantTestCase
 from django_tenants.utils import get_public_schema_name, schema_context, tenant_context
 from rest_framework.test import APIClient
 
-from apps.accounts.models import Role, User
+from apps.accounts import oidc
+from apps.accounts.models import OrgSSOConfig, Role, User
 from apps.tenancy.models import Domain, Organization
 from apps.workflow.autonomous.thread_pool import submit
 from apps.workflow.models import PlatformConfiguration, Product
@@ -225,3 +230,118 @@ class BillingTests(TenantTestCase):
         r = self.api.post("/api/v1/billing/checkout/", {"plan": "team_10"},
                           format="json", HTTP_HOST=self.host)
         self.assertEqual(r.status_code, 503)  # billing not configured (no Stripe key)
+
+
+class SSOProvisioningTests(TenantTestCase):
+    """Pure provisioning logic for OIDC sign-in."""
+
+    def _cfg(self, **over):
+        cfg = OrgSSOConfig.load()
+        cfg.enabled = True
+        cfg.discovery_url = "https://idp.example/.well-known/openid-configuration"
+        cfg.client_id = "cid"
+        cfg.auto_provision = True
+        cfg.default_role = Role.MEMBER
+        for k, v in over.items():
+            setattr(cfg, k, v)
+        cfg.save()
+        return cfg
+
+    def test_auto_provisions_user_with_default_role(self):
+        cfg = self._cfg(default_role=Role.ADMIN)
+        user = oidc.provision_user(cfg, {"email": "New@Demo.test", "name": "New User"})
+        self.assertEqual(user.email, "new@demo.test")
+        self.assertEqual(user.role, Role.ADMIN)
+        self.assertEqual(user.auth_source, "SSO")
+        self.assertFalse(user.has_usable_password())
+
+    def test_rejects_disallowed_domain(self):
+        cfg = self._cfg(allowed_email_domains="acme.com, demo.test")
+        with self.assertRaises(oidc.SSODomainNotAllowed):
+            oidc.provision_user(cfg, {"email": "bob@evil.com"})
+
+    def test_returns_existing_user(self):
+        cfg = self._cfg()
+        existing = User.objects.create_user("exists@demo.test", password="pw", role=Role.OWNER)
+        user = oidc.provision_user(cfg, {"email": "exists@demo.test"})
+        self.assertEqual(user.pk, existing.pk)
+        self.assertEqual(user.role, Role.OWNER)  # unchanged
+
+    def test_no_autoprovision_raises_for_unknown_user(self):
+        cfg = self._cfg(auto_provision=False)
+        with self.assertRaises(oidc.SSOError):
+            oidc.provision_user(cfg, {"email": "ghost@demo.test"})
+
+
+@override_settings(ALLOWED_HOSTS=["*"])
+class SSOCallbackTests(TenantTestCase):
+    @patch("apps.accounts.oidc.fetch_userinfo")
+    @patch("apps.accounts.oidc.exchange_code")
+    def test_callback_provisions_and_logs_in(self, m_exchange, m_userinfo):
+        m_exchange.return_value = {"access_token": "tok"}
+        m_userinfo.return_value = {"email": "sso@demo.test", "name": "SSO User"}
+        cfg = OrgSSOConfig.load()
+        cfg.enabled = True
+        cfg.discovery_url = "https://idp.example/.well-known/openid-configuration"
+        cfg.client_id = "cid"
+        cfg.save()
+
+        host = self.tenant.get_primary_domain().domain
+        client = Client()
+        session = client.session
+        session["sso_state"] = "st123"
+        session.save()
+
+        resp = client.get("/sso/callback/?code=abc&state=st123", HTTP_HOST=host)
+        self.assertEqual(resp.status_code, 302)
+        self.assertTrue(User.objects.filter(email="sso@demo.test", auth_source="SSO").exists())
+
+    @override_settings(ALLOWED_HOSTS=["*"])
+    def test_callback_rejects_bad_state(self):
+        cfg = OrgSSOConfig.load()
+        cfg.enabled = True
+        cfg.save()
+        host = self.tenant.get_primary_domain().domain
+        resp = Client().get("/sso/callback/?code=abc&state=wrong", HTTP_HOST=host)
+        self.assertEqual(resp.status_code, 302)
+        self.assertIn("sso=badstate", resp.url)
+
+
+@override_settings(ALLOWED_HOSTS=["*"],
+                   EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend")
+class PasswordResetTests(TenantTestCase):
+    def setUp(self):
+        super().setUp()
+        self.host = self.tenant.get_primary_domain().domain
+        self.user = User.objects.create_user("reset@demo.test", password="OldPass123", role=Role.MEMBER)
+        self.api = APIClient()
+        mail.outbox = []
+
+    def test_request_sends_email_then_confirm_changes_password(self):
+        r = self.api.post("/api/v1/auth/password-reset/", {"email": "reset@demo.test"},
+                          format="json", HTTP_HOST=self.host)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+
+        m = re.search(r"uid=([^&\s]+)&token=([^&\s]+)", mail.outbox[0].body)
+        self.assertIsNotNone(m)
+        uid, token = m.group(1), m.group(2)
+
+        c = self.api.post("/api/v1/auth/password-reset/confirm/",
+                          {"uid": uid, "token": token, "new_password": "BrandNew123"},
+                          format="json", HTTP_HOST=self.host)
+        self.assertEqual(c.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password("BrandNew123"))
+
+    def test_unknown_email_still_returns_200_without_sending(self):
+        r = self.api.post("/api/v1/auth/password-reset/", {"email": "nobody@demo.test"},
+                          format="json", HTTP_HOST=self.host)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_invalid_token_is_rejected(self):
+        c = self.api.post("/api/v1/auth/password-reset/confirm/",
+                          {"uid": "bad", "token": "bad", "new_password": "whatever123"},
+                          format="json", HTTP_HOST=self.host)
+        self.assertEqual(c.status_code, 400)

@@ -53,8 +53,10 @@ is far cheaper than later.
 ### D4. SSO protocol — **Recommend: OIDC first (Azure AD), SAML later**
 Azure AD/Entra fully supports OIDC. Use **per-org IdP config** (client id/secret/
 discovery URL) stored encrypted (reuse Checkpoint 2's `EncryptedCharField`).
-Library: `authlib` (clean OIDC, framework-agnostic). SAML (`python3-saml`) added
-later for IdPs that need it.
+Because client credentials are per-tenant (dynamic), the implementation drives a
+standard authorization-code flow with `requests` (discovery → token → userinfo)
+rather than a statically-registered Authlib client. SAML (`python3-saml`) can be
+added later for IdPs that need it.
 
 ### D5. Billing engine — **Recommend: Stripe**
 Stripe Billing for seat subscriptions (quantity = seats, tiered packages) +
